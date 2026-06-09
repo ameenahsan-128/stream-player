@@ -1,0 +1,249 @@
+================================================================================
+STREAMING TECHNOLOGY ANALYSIS REPORT
+================================================================================
+
+Button #1: Link 1 | Spain vs Peru | HD
+Source URL: https://siiirjune1.blogspot.com/p/mci.html
+--------------------------------------------------
+Tech Classified: DASH
+Player Framework: shaka
+Direct Stream URLs Found:
+  - https://otte.live.fly.ww.aiv-cdn.net/gru-nitro/live/clients/dash/enc/m7duvnk2bu/out/v1/d1ad69118b5647309b1eb7213affdb3d/cenc.mpd
+DRM ClearKeys Found:
+  - Key ID (KID): 4bbcff3289d457b4dd5dbdd21221de9a
+    Key Value:   c4906b9a9f8dda3c0725bddb8c497733
+
+Copy-Pasteable Integration Code:
+```html
+<!-- Shaka Player HTML for DASH Stream with ClearKeys -->
+<script src="https://ajax.googleapis.com/ajax/libs/shaka-player/4.3.5/shaka-player.compiled.js"></script>
+<link rel="stylesheet" href="https://ajax.googleapis.com/ajax/libs/shaka-player/4.3.5/controls.css">
+<div data-shaka-player-container style="max-width:800px">
+  <video data-shaka-player id="video" autoplay style="width:100%;height:100%"></video>
+</div>
+<script>
+  async function initPlayer() {
+    const video = document.getElementById('video');
+    const player = new shaka.Player(video);
+    
+    player.configure({
+      drm: {
+        clearKeys: {
+          "4bbcff3289d457b4dd5dbdd21221de9a": "c4906b9a9f8dda3c0725bddb8c497733"
+      }
+      }
+    });
+    
+    try {
+      await player.load('https://otte.live.fly.ww.aiv-cdn.net/gru-nitro/live/clients/dash/enc/m7duvnk2bu/out/v1/d1ad69118b5647309b1eb7213affdb3d/cenc.mpd');
+      console.log("Stream loaded successfully!");
+    } catch (e) {
+      console.error("Error loading stream:", e);
+    }
+  }
+  document.addEventListener('shaka-ui-loaded-failed', () => console.error("UI load failed"));
+  document.addEventListener('shaka-ui-loaded', initPlayer);
+</script>
+```
+
+================================================================================
+
+Button #2: Link 2 | Spain vs Peru | HD
+Source URL: https://socojune1.blogspot.com/p/soco2.html
+--------------------------------------------------
+Tech Classified: HLS
+Player Framework: hls.js / video.js
+Direct Stream URLs Found:
+  - https://live.666666.zip/live/4541786.m3u8
+
+Copy-Pasteable Integration Code:
+```html
+<!-- HLS Player HTML -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<video id="video" controls autoplay width="100%" height="auto"></video>
+<script>
+  var video = document.getElementById('video');
+  var videoSrc = 'https://live.666666.zip/live/4541786.m3u8';
+  if (Hls.isSupported()) {
+    var hls = new Hls();
+    hls.loadSource(videoSrc);
+    hls.attachMedia(video);
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = videoSrc;
+  }
+</script>
+```
+
+================================================================================
+
+Button #3: Link 3 | Spain vs Peru | HD
+Source URL: https://csjune1.blogspot.com/p/c2.html
+--------------------------------------------------
+Tech Classified: HLS
+Player Framework: hls.js / video.js
+Direct Stream URLs Found:
+  - https://veotest.bbvplayline1a.com/video.html?url=https://live.666666.zip/live/4541786.m3u8
+  - https://d2zihajmogu5jn.cloudfront.net/elephantsdream/hls/manifest5/index.m3u8
+
+Copy-Pasteable Integration Code:
+```html
+<!-- HLS Player HTML -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<video id="video" controls autoplay width="100%" height="auto"></video>
+<script>
+  var video = document.getElementById('video');
+  var videoSrc = 'https://veotest.bbvplayline1a.com/video.html?url=https://live.666666.zip/live/4541786.m3u8';
+  if (Hls.isSupported()) {
+    var hls = new Hls();
+    hls.loadSource(videoSrc);
+    hls.attachMedia(video);
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = videoSrc;
+  }
+</script>
+```
+
+================================================================================
+
+Button #4: Link 4 | Spain vs Peru | HD
+Source URL: https://siiirjune1.blogspot.com/p/plyr2.html
+--------------------------------------------------
+Tech Classified: HLS
+Player Framework: hls.js / video.js
+Direct Stream URLs Found:
+  - https://cinebolt.net/api/iptv-proxy?url=http://193.47.62.47/hls/KSSSQqqqqC.m3u8&referrer=http://www.fawanews.sc/&user_agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0
+
+Copy-Pasteable Integration Code:
+```html
+<!-- HLS Player HTML -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<video id="video" controls autoplay width="100%" height="auto"></video>
+<script>
+  var video = document.getElementById('video');
+  var videoSrc = 'https://cinebolt.net/api/iptv-proxy?url=http://193.47.62.47/hls/KSSSQqqqqC.m3u8&referrer=http://www.fawanews.sc/&user_agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0';
+  if (Hls.isSupported()) {
+    var hls = new Hls();
+    hls.loadSource(videoSrc);
+    hls.attachMedia(video);
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = videoSrc;
+  }
+</script>
+```
+
+================================================================================
+
+Button #5: Link 5 | Spain vs Peru | HD
+Source URL: https://youtjune1.blogspot.com/p/l2.html
+--------------------------------------------------
+Tech Classified: HLS
+Player Framework: hls.js / video.js
+Direct Stream URLs Found:
+  - https://pull.niues.live/live/stream-9912091.m3u8
+
+Copy-Pasteable Integration Code:
+```html
+<!-- HLS Player HTML -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<video id="video" controls autoplay width="100%" height="auto"></video>
+<script>
+  var video = document.getElementById('video');
+  var videoSrc = 'https://pull.niues.live/live/stream-9912091.m3u8';
+  if (Hls.isSupported()) {
+    var hls = new Hls();
+    hls.loadSource(videoSrc);
+    hls.attachMedia(video);
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = videoSrc;
+  }
+</script>
+```
+
+================================================================================
+
+Button #6: Link 6 | Spain vs Peru | HD
+Source URL: https://livejune1.blogspot.com/p/game-2.html?id=gm6
+--------------------------------------------------
+Tech Classified: HLS
+Player Framework: hls.js / video.js
+Direct Stream URLs Found:
+  - https://veotest.bbvplayline1a.com/video.html?url=https://live5.msrktz.app/live/97312754.m3u8
+  - https://hls.cdnfaster-b.site/live/GIANGPHUNGTIEN/index.m3u8?expire=1892388660&sign=307f59b7df73ce01272ff1281896bae9
+
+Copy-Pasteable Integration Code:
+```html
+<!-- HLS Player HTML -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<video id="video" controls autoplay width="100%" height="auto"></video>
+<script>
+  var video = document.getElementById('video');
+  var videoSrc = 'https://veotest.bbvplayline1a.com/video.html?url=https://live5.msrktz.app/live/97312754.m3u8';
+  if (Hls.isSupported()) {
+    var hls = new Hls();
+    hls.loadSource(videoSrc);
+    hls.attachMedia(video);
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = videoSrc;
+  }
+</script>
+```
+
+================================================================================
+
+Button #7: Link 7 | Spain vs Peru | HD
+Source URL: https://livejune1.blogspot.com/p/game-2.html?id=gm7
+--------------------------------------------------
+Tech Classified: HLS
+Player Framework: hls.js / video.js
+Direct Stream URLs Found:
+  - https://veotest.bbvplayline1a.com/video.html?url=https://live5.msrktz.app/live/97312754.m3u8
+  - https://d2zihajmogu5jn.cloudfront.net/elephantsdream/hls/manifest5/index.m3u8
+
+Copy-Pasteable Integration Code:
+```html
+<!-- HLS Player HTML -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<video id="video" controls autoplay width="100%" height="auto"></video>
+<script>
+  var video = document.getElementById('video');
+  var videoSrc = 'https://veotest.bbvplayline1a.com/video.html?url=https://live5.msrktz.app/live/97312754.m3u8';
+  if (Hls.isSupported()) {
+    var hls = new Hls();
+    hls.loadSource(videoSrc);
+    hls.attachMedia(video);
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = videoSrc;
+  }
+</script>
+```
+
+================================================================================
+
+Button #8: Link 8 | Spain vs Peru | HD
+Source URL: https://livejune1.blogspot.com/p/game-2.html?id=gm8
+--------------------------------------------------
+Tech Classified: HLS
+Player Framework: hls.js / video.js
+Direct Stream URLs Found:
+  - https://veotest.bbvplayline1a.com/video.html?url=https://live5.msrktz.app/live/97312754.m3u8
+
+Copy-Pasteable Integration Code:
+```html
+<!-- HLS Player HTML -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<video id="video" controls autoplay width="100%" height="auto"></video>
+<script>
+  var video = document.getElementById('video');
+  var videoSrc = 'https://veotest.bbvplayline1a.com/video.html?url=https://live5.msrktz.app/live/97312754.m3u8';
+  if (Hls.isSupported()) {
+    var hls = new Hls();
+    hls.loadSource(videoSrc);
+    hls.attachMedia(video);
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = videoSrc;
+  }
+</script>
+```
+
+================================================================================
+
