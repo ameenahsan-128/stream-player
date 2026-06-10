@@ -44,14 +44,14 @@ def update_blogger_post(config, access_token, html_content):
     post_id = config.get("post_id")
     title = config.get("post_title", "Argentina Live Stream")
     
-    print(f"[*] Updating Blogger post (ID: {post_id}) in Blog (ID: {blog_id})...")
-    url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
-    
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
     }
     
+    # Try as a Post first
+    print(f"[*] Attempting to update Blogger post (ID: {post_id})...")
+    url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
     payload = {
         "kind": "blogger#post",
         "id": post_id,
@@ -61,13 +61,36 @@ def update_blogger_post(config, access_token, html_content):
     }
     
     try:
-        # We use PATCH to only update specified fields (title and content)
         response = requests.patch(url, headers=headers, json=payload, timeout=20)
         response.raise_for_status()
         print("[+] SUCCESS: Blogger post updated successfully!")
         print(f"[+] Post URL: {response.json().get('url')}")
+        return
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            print("[*] Post not found. Attempting to update as a Blogger Page instead...")
+        else:
+            raise e
     except Exception as e:
-        print(f"[-] Failed to update Blogger post: {e}", file=sys.stderr)
+        raise e
+
+    # Fallback to Page
+    url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/pages/{post_id}"
+    payload = {
+        "kind": "blogger#page",
+        "id": post_id,
+        "blog": {"id": blog_id},
+        "title": title,
+        "content": html_content
+    }
+    
+    try:
+        response = requests.patch(url, headers=headers, json=payload, timeout=20)
+        response.raise_for_status()
+        print("[+] SUCCESS: Blogger page updated successfully!")
+        print(f"[+] Page URL: {response.json().get('url')}")
+    except Exception as e:
+        print(f"[-] Failed to update Blogger post/page: {e}", file=sys.stderr)
         if response is not None:
             print(f"[-] Response: {response.text}", file=sys.stderr)
         sys.exit(1)

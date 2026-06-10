@@ -34,13 +34,34 @@ def get_access_token(config):
 
 def update_blogger_post(config, access_token, post_id, title, html_content):
     blog_id = config.get("blog_id")
-    url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
     }
+    
+    # Try as a Post first
+    url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
     payload = {
         "kind": "blogger#post",
+        "id": post_id,
+        "blog": {"id": blog_id},
+        "title": title,
+        "content": html_content
+    }
+    try:
+        response = requests.patch(url, headers=headers, json=payload, timeout=20)
+        response.raise_for_status()
+        return response.json().get("url")
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            print("[*] Post ID not found, trying as a Blogger Page...")
+        else:
+            raise e
+            
+    # Try as a Page
+    url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/pages/{post_id}"
+    payload = {
+        "kind": "blogger#page",
         "id": post_id,
         "blog": {"id": blog_id},
         "title": title,
