@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>Link 2 — iphone 🍎</title>
+<!-- Shaka Player (DASH + HLS native) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.11/shaka-player.compiled.min.js"></script>
+<!-- HLS.js fallback -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.10/hls.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; background:#000; overflow:hidden; font-family:sans-serif; }
+  #video-wrapper { width:100%; height:100%; position:relative; display:flex; align-items:center; justify-content:center; }
+  video { width:100%; height:100%; object-fit:contain; background:#000; }
+  iframe { width:100%; height:100%; border:none; background:#000; }
+  .overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(10,10,15,0.9); color: #fff; z-index: 10; font-size: 16px; transition: opacity 0.5s;
+  }
+  .spinner {
+    width: 50px; height: 50px; border: 3px solid rgba(255,255,255,0.1);
+    border-radius: 50%; border-top-color: #e63946; animation: spin 1s ease-in-out infinite; margin-bottom: 15px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="video-wrapper">
+  <div id="overlay-load" class="overlay">
+    <div class="spinner"></div>
+    <div id="load-msg">Loading stream...</div>
+  </div>
+  <div id="overlay-error" class="overlay hidden">
+    <div style="color:#e63946; font-size:24px; margin-bottom:10px;">⚠ Playback Error</div>
+    <div id="err-msg">Stream could not be loaded.</div>
+  </div>
+  <video id="video" controls autoplay playsinline></video>
+  <div id="iframe-wrap" style="display:none; width:100%; height:100%;">
+    <iframe id="iframe-el" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+  </div>
+</div>
+<script>
+  const streamUrl = "https://live05.msdht.app/live/24561735.m3u8";
+  const streamType = "hls";
+  const clearKeys = {};
+
+  const video = document.getElementById('video');
+  const overlayLoad = document.getElementById('overlay-load');
+  const overlayError = document.getElementById('overlay-error');
+  const loadMsg = document.getElementById('load-msg');
+  const errMsg = document.getElementById('err-msg');
+  const iframeWrap = document.getElementById('iframe-wrap');
+  const iframeEl = document.getElementById('iframe-el');
+
+  let shakaPlayer = null;
+  let hlsInstance = null;
+
+  function initPlayer(url, type) {
+    if (type === 'iframe') {
+      video.style.display = 'none';
+      iframeWrap.style.display = 'block';
+      iframeEl.src = url;
+      overlayLoad.classList.add('hidden');
+      return;
+    }
+
+    if (type === 'dash') {
+      if (shaka.Player.isBrowserSupported()) {
+        shakaPlayer = new shaka.Player(video);
+        shakaPlayer.addEventListener('error', (e) => {
+          console.error("Shaka error", e);
+          showError("DASH Player Error: " + e.detail.code);
+        });
+        
+        if (clearKeys && Object.keys(clearKeys).length > 0) {
+          shakaPlayer.configure({
+            drm: { clearKeys: clearKeys }
+          });
+        }
+
+        shakaPlayer.load(url).then(() => {
+          overlayLoad.classList.add('hidden');
+          video.play().catch(()=>{});
+        }).catch((e) => {
+          console.error("Shaka load error", e);
+          showError("Could not load DASH manifest.");
+        });
+      } else {
+        showError("DASH is not supported by this browser.");
+      }
+    } else if (type === 'hls') {
+      if (Hls.isSupported()) {
+        hlsInstance = new Hls({ maxMaxBufferLength: 10 });
+        hlsInstance.loadSource(url);
+        hlsInstance.attachMedia(video);
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+          overlayLoad.classList.add('hidden');
+          video.play().catch(()=>{});
+        });
+        hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            console.error("HLS fatal error", data);
+            showError("HLS fatal playback error.");
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = url;
+        video.addEventListener('loadedmetadata', () => {
+          overlayLoad.classList.add('hidden');
+          video.play().catch(()=>{});
+        });
+        video.addEventListener('error', () => {
+          showError("Native HLS playback error.");
+        });
+      } else {
+        showError("HLS is not supported by this browser.");
+      }
+    } else {
+      video.src = url;
+      video.addEventListener('loadedmetadata', () => {
+        overlayLoad.classList.add('hidden');
+        video.play().catch(()=>{});
+      });
+      video.addEventListener('error', () => {
+        showError("Native HTML5 playback error.");
+      });
+    }
+  }
+
+  function showError(msg) {
+    overlayLoad.classList.add('hidden');
+    errMsg.textContent = msg;
+    overlayError.classList.remove('hidden');
+  }
+
+  initPlayer(streamUrl, streamType);
+</script>
+</body>
+</html>

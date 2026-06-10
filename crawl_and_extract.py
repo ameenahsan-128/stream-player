@@ -243,6 +243,25 @@ def extract_final_stream_details(tree):
                 
     streams = list(dict.fromkeys(streams))
     
+    # Fallback to iframes if no direct streams found
+    if not streams:
+        def find_all_iframes(node):
+            if not node:
+                return []
+            iframes = []
+            for link in node.get("nested_links", []):
+                if link.get("type") == "iframe":
+                    iframes.append(link.get("url"))
+            for nested in node.get("nested_results", []):
+                iframes.extend(find_all_iframes(nested))
+            return list(dict.fromkeys(iframes))
+            
+        iframes = find_all_iframes(tree)
+        if iframes:
+            streams = iframes
+            stream_type = "iframe"
+            player = "iframe"
+            
     return {
         "streams": streams,
         "clear_keys": clear_keys,
@@ -296,6 +315,10 @@ def make_dash_snippet(url, keys):
   document.addEventListener('shaka-ui-loaded-failed', () => console.error("UI load failed"));
   document.addEventListener('shaka-ui-loaded', initPlayer);
 </script>"""
+
+def make_iframe_snippet(url):
+    return f"""<!-- Iframe Embed Player HTML -->
+<iframe src="{url}" width="100%" height="450px" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="background:#000;"></iframe>"""
 
 def process_root_url(root_url, max_depth=2):
     print(f"\n[*] STEP 1: Scraping root page for links: {root_url}")
@@ -355,6 +378,8 @@ def save_text_report(results, out_path):
             main_stream = details["streams"][0]
             if details["type"] == "dash" and details["clear_keys"]:
                 snippet = make_dash_snippet(main_stream, details["clear_keys"])
+            elif details["type"] == "iframe":
+                snippet = make_iframe_snippet(main_stream)
             else:
                 snippet = make_hls_snippet(main_stream)
             f.write(snippet + "\n")

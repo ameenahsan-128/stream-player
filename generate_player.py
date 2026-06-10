@@ -670,10 +670,52 @@ input[type=range].vol-slider {
 </div><!-- /main -->
 
 <script>
+function initPlayerSystem() {
 /* ═══════════════════════════════════════════════════════════════
    STREAM LINKS CONFIG
 ═══════════════════════════════════════════════════════════════ */
 ##STREAM_LINKS_PLACEHOLDER##
+
+// Initialize links status tracking
+STREAM_LINKS.forEach((lnk, i) => {
+  lnk.id = i;
+  lnk.failCount = 0;
+  lnk.success = false;
+});
+
+function sortAndRebuildLinks() {
+  const activeId = STREAM_LINKS[activeIndex] ? STREAM_LINKS[activeIndex].id : null;
+  
+  STREAM_LINKS.sort((a, b) => {
+    const aFailed = a.failCount > 0;
+    const bFailed = b.failCount > 0;
+    
+    // Put failed ones at the bottom, sorted by failCount ascending
+    if (aFailed && !bFailed) return 1;
+    if (!aFailed && bFailed) return -1;
+    if (aFailed && bFailed) {
+      if (a.failCount !== b.failCount) {
+        return a.failCount - b.failCount;
+      }
+    }
+    
+    // Put successful ones at the top
+    if (a.success && !b.success) return -1;
+    if (!a.success && b.success) return 1;
+    
+    // Keep original python priority
+    return a.id - b.id;
+  });
+  
+  if (activeId !== null) {
+    activeIndex = STREAM_LINKS.findIndex(l => l.id === activeId);
+  }
+  
+  buildLinks();
+  if (activeIndex !== -1) {
+    setActive(activeIndex);
+  }
+}
 
 /* ═══════════════════════════════════════════════════════════════
    ENGINE DETECTION
@@ -809,25 +851,64 @@ function showError(msg) {
   ovLoad.classList.add('hidden');
   errMsg.textContent = msg || 'Stream could not be loaded.';
   ovErr.classList.remove('hidden');
-  const next = STREAM_LINKS.findIndex((l, i) => i > activeIndex && l.url);
-  retryBtn.textContent = next !== -1 ? '▶ Try Next Link' : '🔄 Refresh';
+  
+  // Find next link before sorting
+  let nextIdx = -1;
+  let nextId = null;
+  
+  let nextUntried = STREAM_LINKS.findIndex((l, i) => i !== activeIndex && l.failCount === 0 && l.url);
+  if (nextUntried !== -1) {
+    nextIdx = nextUntried;
+  } else {
+    let minFail = Infinity;
+    let bestIdx = -1;
+    STREAM_LINKS.forEach((l, i) => {
+      if (i !== activeIndex && l.url) {
+        if (l.failCount < minFail) {
+          minFail = l.failCount;
+          bestIdx = i;
+        }
+      }
+    });
+    nextIdx = bestIdx;
+  }
+  
+  if (nextIdx !== -1) {
+    nextId = STREAM_LINKS[nextIdx].id;
+  }
+
+  // Update failure score
+  const activeLnk = STREAM_LINKS[activeIndex];
+  if (activeLnk) {
+    activeLnk.failCount++;
+    activeLnk.success = false;
+    sortAndRebuildLinks();
+  }
+
+  // Find the new index of next after sorting
+  let finalNextIdx = -1;
+  if (nextId !== null) {
+    finalNextIdx = STREAM_LINKS.findIndex(l => l.id === nextId);
+  }
+
+  retryBtn.textContent = finalNextIdx !== -1 ? '▶ Try Next Link' : '🔄 Refresh';
   setStatus('error', 'Stream error');
   setEngineBadge('none');
   
-  if (next !== -1) {
+  if (finalNextIdx !== -1) {
     clearTimeout(autoswitchTimeout);
     ovLoadMsg.textContent = 'Stream error. Autoswitching to next link...';
     ovLoad.classList.remove('hidden');
     ovErr.classList.add('hidden');
     autoswitchTimeout = setTimeout(() => {
-      switchStream(next);
+      switchStream(finalNextIdx);
     }, 3000);
   }
 }
 
 /* ═══════════════════════════════════════════════════════════════
    IFRAME MODE
-═══════════════════════════════════════════════════════════════ */
+ ═══════════════════════════════════════════════════════════════ */
 function loadIframe(url) {
   buildEngineTries(['iframe']);
   setEngineTry('iframe', 'trying');
@@ -842,6 +923,14 @@ function loadIframe(url) {
     setEngineTry('iframe', 'success');
     setEngineBadge('iframe');
     setStatus('live', 'Embed loaded');
+    
+    // Mark success
+    const activeLnk = STREAM_LINKS[activeIndex];
+    if (activeLnk) {
+      activeLnk.success = true;
+      activeLnk.failCount = 0;
+      sortAndRebuildLinks();
+    }
   };
   iframeEl.onerror = () => {
     showError('Could not load the embed. Try another link.');
@@ -853,6 +942,13 @@ function loadIframe(url) {
       setEngineBadge('iframe');
       setStatus('live', 'Embed loaded');
       setEngineTry('iframe', 'success');
+      
+      const activeLnk = STREAM_LINKS[activeIndex];
+      if (activeLnk) {
+        activeLnk.success = true;
+        activeLnk.failCount = 0;
+        sortAndRebuildLinks();
+      }
     }
   }, 4000);
 }
@@ -1126,6 +1222,14 @@ video.addEventListener('playing', () => {
     setEngineBadge('native');
     setEngineTry('native', 'success');
   }
+  
+  // Mark success
+  const activeLnk = STREAM_LINKS[activeIndex];
+  if (activeLnk) {
+    activeLnk.success = true;
+    activeLnk.failCount = 0;
+    sortAndRebuildLinks();
+  }
 });
 video.addEventListener('stalled', () => setStatus('buffer', 'Stream stalled...'));
 video.addEventListener('error',   () => {
@@ -1180,8 +1284,24 @@ vwrap.addEventListener('touchstart', () => {
    RETRY
 ═══════════════════════════════════════════════════════════════ */
 retryBtn.addEventListener('click', () => {
-  const next = STREAM_LINKS.findIndex((l, i) => i > activeIndex && l.url);
-  if (next !== -1) switchStream(next);
+  let nextIdx = -1;
+  let nextUntried = STREAM_LINKS.findIndex((l, i) => i !== activeIndex && l.failCount === 0 && l.url);
+  if (nextUntried !== -1) {
+    nextIdx = nextUntried;
+  } else {
+    let minFail = Infinity;
+    let bestIdx = -1;
+    STREAM_LINKS.forEach((l, i) => {
+      if (i !== activeIndex && l.url) {
+        if (l.failCount < minFail) {
+          minFail = l.failCount;
+          bestIdx = i;
+        }
+      }
+    });
+    nextIdx = bestIdx;
+  }
+  if (nextIdx !== -1) switchStream(nextIdx);
   else location.reload();
 });
 
@@ -1270,6 +1390,14 @@ if (paramUrl) {
     setStatus('', 'No stream URL');
   }
 }
+function bootstrapPlayer() {
+  if (document.getElementById('links-list') && document.getElementById('video')) {
+    initPlayerSystem();
+  } else {
+    setTimeout(bootstrapPlayer, 50);
+  }
+}
+bootstrapPlayer();
 </script>
 </body>
 </html>"""
@@ -1277,7 +1405,170 @@ if (paramUrl) {
 # ----------------------------------------------------------------------
 # Crawler Logic
 # ----------------------------------------------------------------------
-def extract_root_links(root_url, pattern="^link", headers=None):
+def is_match_page_url(url, text):
+    u = url.lower()
+    t = text.lower()
+    # Exclude profile, labels or feed URLs
+    if any(p in u for p in ["/privacy", "/contact", "/about", "/disclaimer", "/terms", "/search/label", "feed", "blogger.com", "whatsapp.com", "t.me", "telegram"]):
+        return False
+    # Check for match indicators
+    match_indicators = ["vs", " v ", "live", "watch", "stream", "score", "match", "friendly", "telecast", "preview", "lineup"]
+    if any(ind in u or ind in t for ind in match_indicators):
+        if any(p in u for p in ["/2025/", "/2026/", "/p/"]):
+            return True
+    return False
+
+def get_match_pages_from_root(root_url, html):
+    parser = EpicLinkParser(root_url)
+    parser.feed(html)
+    
+    url_to_texts = {}
+    for item in parser.results:
+        if item["tag"] == "a":
+            u = item["url"]
+            t = item["text"].strip()
+            if t:
+                if u not in url_to_texts:
+                    url_to_texts[u] = []
+                if t not in url_to_texts[u]:
+                    url_to_texts[u].append(t)
+                    
+    match_pages = []
+    for u, texts in url_to_texts.items():
+        is_match = False
+        for t in texts:
+            if is_match_page_url(u, t):
+                is_match = True
+                break
+        if is_match:
+            time_str = None
+            for t in texts:
+                if re.search(r'\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b', t, re.IGNORECASE):
+                    time_str = t
+                    break
+            
+            combined_label = " | ".join(texts)
+            match_pages.append({
+                "url": u,
+                "texts": texts,
+                "time_str": time_str,
+                "label": combined_label
+            })
+    return match_pages
+
+def parse_match_time(time_str):
+    from datetime import datetime, time, timedelta
+    match = re.search(r'(\d{1,2}):(\d{2})\s*(AM|PM)?', time_str, re.IGNORECASE)
+    if not match:
+        return None
+    
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    ampm = match.group(3)
+    
+    if ampm:
+        ampm = ampm.upper()
+        if ampm == "PM" and hour < 12:
+            hour += 12
+        elif ampm == "AM" and hour == 12:
+            hour = 0
+            
+    now = datetime.now()
+    match_dt = datetime.combine(now.date(), time(hour, minute))
+    
+    diff = match_dt - now
+    if diff.total_seconds() < -43200:
+        match_dt += timedelta(days=1)
+    elif diff.total_seconds() > 43200:
+        match_dt -= timedelta(days=1)
+        
+    return match_dt
+
+def is_match_active(time_str):
+    from datetime import datetime
+    if not time_str:
+        return True
+        
+    dt = parse_match_time(time_str)
+    if not dt:
+        return True
+        
+    now = datetime.now()
+    diff = dt - now
+    diff_minutes = diff.total_seconds() / 60.0
+    
+    # Active if starting within 10 minutes OR started up to 3 hours (180 minutes) ago
+    if -180.0 <= diff_minutes <= 10.0:
+        return True
+    return False
+
+def extract_match_name(text_or_url):
+    # Match strings like Spain vs Peru or France v Northern Ireland
+    match = re.search(r'([a-zA-Z0-9\s\.\-]+?\s+(?:vs|v\.?)\s+[a-zA-Z0-9\s\.\-]+)', text_or_url, re.IGNORECASE)
+    if match:
+        name = match.group(1).strip()
+        # Clean up double spaces, trailing words
+        name = re.sub(r'\s+', ' ', name)
+        name = re.sub(r'(?i)\b(live|score|preview|lineup|telecast|details|stream|free|online|watch|hd|sd|link)\b.*', '', name).strip()
+        return name
+    return None
+
+def get_clean_match_title(label, url):
+    if not url:
+        return None
+    # 1. Try to extract from label
+    match_name = extract_match_name(label)
+    if match_name:
+        return match_name
+        
+    # 2. Try to extract from URL (path)
+    parsed = urlparse(url)
+    path_segment = parsed.path
+    if path_segment.lower().endswith(".html"):
+        path_segment = path_segment[:-5]
+    elif path_segment.lower().endswith(".htm"):
+        path_segment = path_segment[:-4]
+        
+    path_segment = path_segment.replace("-", " ").replace("_", " ")
+    match_name = extract_match_name(path_segment)
+    if match_name:
+        return match_name.title()
+        
+    # 3. Fall back
+    return None
+
+def is_likely_stream_button(text, url, parent_url):
+    u = url.lower()
+    t = text.lower()
+    
+    # Exclude social/template links
+    if any(social in u for social in ["whatsapp.com", "t.me", "telegram.me", "facebook.com", "twitter.com", "instagram.com", "pinterest.com", "linkedin.com", "tumblr.com", "blogger.com/profile", "google.com", "themexpose", "gooyaabi"]):
+        return False
+        
+    # Exclude pages like Contact, About, Privacy
+    if any(p in u for p in ["/privacy", "/contact", "/about", "/disclaimer", "/terms"]):
+        return False
+        
+    # Exclude typical search query templates
+    if "/search?q=" in u:
+        return False
+        
+    # If the URL is a dated post on the same or related blog, it is likely a match preview link, not a stream button
+    is_dated_post = bool(re.search(r'/\d{4}/\d{2}/', u))
+    if is_dated_post:
+        # Check if the text is a short stream button label (e.g. <= 80 chars and has button words)
+        is_short_label = len(t) <= 80 and any(kw in t for kw in ["link", "stream", "watch", "live", "play", "channel", "ios", "android"])
+        if not is_short_label:
+            return False
+            
+    # The text must contain stream keywords
+    keywords = ["link", "stream", "watch", "live", "tv", "channel", "player", "android", "ios", "click"]
+    if any(k in t for k in keywords):
+        return True
+        
+    return False
+
+def extract_root_links(root_url, headers=None):
     if headers is None:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
@@ -1291,14 +1582,12 @@ def extract_root_links(root_url, pattern="^link", headers=None):
     parser = EpicLinkParser(root_url)
     parser.feed(response.text)
     
-    re_pattern = re.compile(pattern, re.IGNORECASE)
     matched_links = []
-    
     for item in parser.results:
         text = item["text"]
         link_url = item["url"]
         
-        if re_pattern.search(text) and item["tag"] in ("a", "button"):
+        if is_likely_stream_button(text, link_url, root_url) and item["tag"] in ("a", "button"):
             matched_links.append({
                 "label": text,
                 "url": link_url
@@ -1387,6 +1676,16 @@ def analyze_page(url, html, visited):
                 "type": "iframe",
                 "url": iframe_url
             })
+            
+    for item in parser.results:
+        if item["tag"] == "a":
+            text = item["text"]
+            link_url = item["url"]
+            if is_likely_stream_button(text, link_url, url) and link_url not in visited and link_url != url:
+                stream_info["nested_links"].append({
+                    "type": "iframe",
+                    "url": link_url
+                })
             
     map_match = re.search(r"(?:const|let|var)?\s*streams\s*=\s*\{([^}]+)\}", html, re.DOTALL)
     if map_match:
@@ -1482,6 +1781,25 @@ def extract_final_stream_details(tree):
                 
     streams = list(dict.fromkeys(streams))
     
+    # Fallback to iframes if no direct streams found
+    if not streams:
+        def find_all_iframes(node):
+            if not node:
+                return []
+            iframes = []
+            for link in node.get("nested_links", []):
+                if link.get("type") == "iframe":
+                    iframes.append(link.get("url"))
+            for nested in node.get("nested_results", []):
+                iframes.extend(find_all_iframes(nested))
+            return list(dict.fromkeys(iframes))
+            
+        iframes = find_all_iframes(tree)
+        if iframes:
+            streams = iframes
+            stream_type = "iframe"
+            player = "iframe"
+            
     return {
         "streams": streams,
         "clear_keys": clear_keys,
@@ -1490,9 +1808,9 @@ def extract_final_stream_details(tree):
     }
 
 def process_root_url(root_url, max_depth=2):
-    print(f"\n[*] STEP 1: Scraping root page for links: {root_url}")
+    print(f"\n[*] STEP 1: Scraping page for stream links: {root_url}")
     matched_links = extract_root_links(root_url)
-    print(f"[+] Found {len(matched_links)} stream buttons/links starting with 'Link'.")
+    print(f"[+] Found {len(matched_links)} stream button(s)/link(s).")
     
     results = []
     for idx, item in enumerate(matched_links, 1):
@@ -1506,6 +1824,7 @@ def process_root_url(root_url, max_depth=2):
         results.append({
             "label": item["label"],
             "root_target_url": item["url"],
+            "root_origin_url": root_url,
             "details": details
         })
         
@@ -1538,6 +1857,17 @@ def main():
         default=2,
         help="Maximum recursion depth for following iframes/redirects (default: 2)."
     )
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="Run continuously in a daemon/loop mode."
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=5,
+        help="Sleep interval in minutes between pipeline runs in loop mode (default: 5)."
+    )
     
     args = parser.parse_args()
     
@@ -1558,143 +1888,427 @@ def main():
         
     print(f"[*] Processing {len(root_urls)} root URL(s)...")
     
-    # Process and crawl all streams
-    all_results = []
-    for root_url in root_urls:
-        results = process_root_url(root_url, max_depth=args.depth)
-        all_results.extend(results)
-    
-    # Format results to JavaScript objects for STREAM_LINKS with sorting by priority (DASH first, then HLS, etc.)
-    resolved_items = []
-    seen_urls = set()
-    
-    for res in all_results:
-        label_raw = res["label"]
-        details = res["details"]
-        
-        if not details or not details["streams"]:
-            print(f"[-] Skipping {label_raw}: No stream URL resolved.")
-            continue
-            
-        stream_url = details["streams"][0]
-        if stream_url in seen_urls:
-            print(f"[-] Skipping duplicate stream URL for: {label_raw}")
-            continue
-        seen_urls.add(stream_url)
-        
-        stream_type = details["type"]
-        clear_keys = details["clear_keys"]
-        
-        # Parse badges from label contents or types
-        badges = [stream_type]
-        label_lower = label_raw.lower()
-        if "hd" in label_lower:
-            badges.append("hd")
-        if "sd" in label_lower:
-            badges.append("sd")
-        if "eng" in label_lower or "english" in label_lower:
-            badges.append("eng")
-        if "ara" in label_lower or "arabic" in label_lower:
-            badges.append("ara")
-        if "ios" in label_lower or "iphone" in label_lower:
-            badges.append("ios")
-            
-        badges = list(dict.fromkeys(badges))
-        
-        # Construct meta descriptive line
-        meta_parts = []
-        if stream_type == "dash":
-            meta_parts.append("MPEG-DASH")
-        elif stream_type == "hls":
-            meta_parts.append("HLS")
-        elif stream_type == "iframe":
-            meta_parts.append("HTML5 Embed")
-        else:
-            meta_parts.append(stream_type.upper())
-            
-        meta_parts.append("Auto Quality")
-        
-        if "eng" in badges:
-            meta_parts.append("English Audio")
-        elif "ara" in badges:
-            meta_parts.append("Arabic Audio")
-            
-        if clear_keys:
-            meta_parts.append("DRM ClearKey Protected")
-            
-        resolved_items.append({
-            "label_raw": label_raw,
-            "stream_url": stream_url,
-            "stream_type": stream_type,
-            "clear_keys": clear_keys,
-            "badges": badges,
-            "meta_parts": meta_parts
-        })
+    import time
+    import html
 
-    # Sort resolved streams stably: DASH (0) -> HLS (1) -> Native (2) -> Iframe/Embed (3) -> Unknown (4)
-    def get_type_priority(item):
-        t = item["stream_type"]
-        if t == "dash":
-            return 0
-        elif t == "hls":
-            return 1
-        elif t == "native":
-            return 2
-        elif t == "iframe":
-            return 3
-        return 4
+    # Standalone Embed Player Template
+    EMBED_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>{title}</title>
+<!-- Shaka Player (DASH + HLS native) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.11/shaka-player.compiled.min.js"></script>
+<!-- HLS.js fallback -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.10/hls.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; background:#000; overflow:hidden; font-family:sans-serif; }
+  #video-wrapper { width:100%; height:100%; position:relative; display:flex; align-items:center; justify-content:center; }
+  video { width:100%; height:100%; object-fit:contain; background:#000; }
+  iframe { width:100%; height:100%; border:none; background:#000; }
+  .overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(10,10,15,0.9); color: #fff; z-index: 10; font-size: 16px; transition: opacity 0.5s;
+  }
+  .spinner {
+    width: 50px; height: 50px; border: 3px solid rgba(255,255,255,0.1);
+    border-radius: 50%; border-top-color: #e63946; animation: spin 1s ease-in-out infinite; margin-bottom: 15px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="video-wrapper">
+  <div id="overlay-load" class="overlay">
+    <div class="spinner"></div>
+    <div id="load-msg">Loading stream...</div>
+  </div>
+  <div id="overlay-error" class="overlay hidden">
+    <div style="color:#e63946; font-size:24px; margin-bottom:10px;">⚠ Playback Error</div>
+    <div id="err-msg">Stream could not be loaded.</div>
+  </div>
+  <video id="video" controls autoplay playsinline></video>
+  <div id="iframe-wrap" style="display:none; width:100%; height:100%;">
+    <iframe id="iframe-el" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+  </div>
+</div>
+<script>
+  const streamUrl = {url_json};
+  const streamType = {type_json};
+  const clearKeys = {keys_json};
 
-    resolved_items.sort(key=get_type_priority)
+  const video = document.getElementById('video');
+  const overlayLoad = document.getElementById('overlay-load');
+  const overlayError = document.getElementById('overlay-error');
+  const loadMsg = document.getElementById('load-msg');
+  const errMsg = document.getElementById('err-msg');
+  const iframeWrap = document.getElementById('iframe-wrap');
+  const iframeEl = document.getElementById('iframe-el');
 
-    # Label and build the final STREAM_LINKS array
-    stream_links_js = []
-    for idx, item in enumerate(resolved_items, 1):
-        label_raw = item["label_raw"]
-        stream_url = item["stream_url"]
-        stream_type = item["stream_type"]
-        clear_keys = item["clear_keys"]
-        badges = item["badges"]
-        meta_parts = item["meta_parts"]
+  let shakaPlayer = null;
+  let hlsInstance = null;
+
+  function initPlayer(url, type) {
+    if (type === 'iframe') {
+      video.style.display = 'none';
+      iframeWrap.style.display = 'block';
+      iframeEl.src = url;
+      overlayLoad.classList.add('hidden');
+      return;
+    }
+
+    if (type === 'dash') {
+      if (shaka.Player.isBrowserSupported()) {
+        shakaPlayer = new shaka.Player(video);
+        shakaPlayer.addEventListener('error', (e) => {
+          console.error("Shaka error", e);
+          showError("DASH Player Error: " + e.detail.code);
+        });
         
-        # Clean labels (e.g. Link 1 | Spain vs Peru | HD -> Link {idx} — Spain vs Peru)
-        clean_label = label_raw
-        if " | " in label_raw:
-            parts = label_raw.split(" | ")
-            if len(parts) >= 2:
-                clean_label = f"Link {idx} — {parts[1]}"
-        elif label_raw.lower().startswith("link"):
-            clean_label = re.sub(r"^Link\s*\d+", f"Link {idx}", label_raw, flags=re.IGNORECASE)
-        else:
-            clean_label = f"Link {idx} — {label_raw}"
-            
-        meta_str = " · ".join(meta_parts)
-        
-        js_obj = {
-            "label": clean_label,
-            "meta": meta_str,
-            "badges": badges,
-            "type": stream_type,
-            "url": stream_url
+        if (clearKeys && Object.keys(clearKeys).length > 0) {
+          shakaPlayer.configure({
+            drm: { clearKeys: clearKeys }
+          });
         }
-        if clear_keys:
-            js_obj["clearKeys"] = clear_keys
-            
-        stream_links_js.append(js_obj)
+
+        shakaPlayer.load(url).then(() => {
+          overlayLoad.classList.add('hidden');
+          video.play().catch(()=>{});
+        }).catch((e) => {
+          console.error("Shaka load error", e);
+          showError("Could not load DASH manifest.");
+        });
+      } else {
+        showError("DASH is not supported by this browser.");
+      }
+    } else if (type === 'hls') {
+      if (Hls.isSupported()) {
+        hlsInstance = new Hls({ maxMaxBufferLength: 10 });
+        hlsInstance.loadSource(url);
+        hlsInstance.attachMedia(video);
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+          overlayLoad.classList.add('hidden');
+          video.play().catch(()=>{});
+        });
+        hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            console.error("HLS fatal error", data);
+            showError("HLS fatal playback error.");
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = url;
+        video.addEventListener('loadedmetadata', () => {
+          overlayLoad.classList.add('hidden');
+          video.play().catch(()=>{});
+        });
+        video.addEventListener('error', () => {
+          showError("Native HLS playback error.");
+        });
+      } else {
+        showError("HLS is not supported by this browser.");
+      }
+    } else {
+      video.src = url;
+      video.addEventListener('loadedmetadata', () => {
+        overlayLoad.classList.add('hidden');
+        video.play().catch(()=>{});
+      });
+      video.addEventListener('error', () => {
+        showError("Native HTML5 playback error.");
+      });
+    }
+  }
+
+  function showError(msg) {
+    overlayLoad.classList.add('hidden');
+    errMsg.textContent = msg;
+    overlayError.classList.remove('hidden');
+  }
+
+  initPlayer(streamUrl, streamType);
+</script>
+</body>
+</html>"""
+
+    # Iframes Index Page Template
+    IFRAMES_PAGE_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Embeddable Player Iframes</title>
+<style>
+  body {{ font-family: sans-serif; background: #0a0a0f; color: #f0f0f0; padding: 20px; }}
+  h1, h2, h3 {{ color: #e63946; }}
+  .card {{ background: #111118; border: 1px solid rgba(255,255,255,0.07); padding: 15px; margin-bottom: 20px; border-radius: 8px; }}
+  code {{ display: block; background: #000; padding: 10px; border-radius: 4px; border: 1px solid #333; color: #50fa7b; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }}
+</style>
+</head>
+<body>
+  <h1>Embeddable Player Iframes</h1>
+  <p>Use the following iframe codes to embed the live streams on other websites. The master player automatically updates as matches change.</p>
+  
+  <div class="card">
+    <h2>1. Master Interactive Player</h2>
+    <p>This player includes the channel sidebar, auto-failover, and time-based match listings. It automatically updates in real-time as new matches start.</p>
+    <code>&lt;iframe src="player.html" width="100%" height="600px" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen&gt;&lt;/iframe&gt;</code>
+  </div>
+
+  <h2>2. Individual Direct Streams</h2>
+  <div id="streams-list">
+    {stream_iframes}
+  </div>
+</body>
+</html>"""
+
+    while True:
+        print(f"\n==================================================")
+        print(f"[*] Pipeline iteration started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"==================================================")
         
-    # Serialize Python dictionary to JavaScript array format
-    js_array_str = "const STREAM_LINKS = " + json.dumps(stream_links_js, indent=2) + ";"
-    
-    # Replace placeholder inside HTML Template
-    output_html = HTML_TEMPLATE.replace("##STREAM_LINKS_PLACEHOLDER##", js_array_str)
-    
-    # Write output HTML file
-    try:
-        with open(args.output, "w", encoding="utf-8") as f:
-            f.write(output_html)
-        print(f"\n[+] SUCCESS: HTML Player generated successfully!")
-        print(f"[+] Output written to: {os.path.abspath(args.output)}")
-    except Exception as e:
-        print(f"[-] Error writing output HTML file: {e}", file=sys.stderr)
+        expanded_root_urls = []
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        
+        for url in root_urls:
+            try:
+                print(f"[*] Checking if root URL is a match portal: {url}")
+                response = requests.get(url, headers=headers, timeout=15)
+                response.raise_for_status()
+                match_pages = get_match_pages_from_root(url, response.text)
+                if match_pages:
+                    print(f"[+] Found {len(match_pages)} total match page(s) on portal. Filtering by time...")
+                    active_count = 0
+                    for mp in match_pages:
+                        time_str = mp.get("time_str")
+                        # Check scheduling proximity
+                        if is_match_active(time_str):
+                            active_count += 1
+                            time_lbl = f" [{time_str}]" if time_str else ""
+                            print(f"  - ACTIVE: {mp['label']}{time_lbl} -> {mp['url']}")
+                            if mp['url'] not in expanded_root_urls:
+                                expanded_root_urls.append(mp['url'])
+                        else:
+                            print(f"  - SKIPPED (not starting soon/active): {mp['label']} [{time_str}] -> {mp['url']}")
+                    print(f"[+] Added {active_count} active match page(s) out of {len(match_pages)}.")
+                else:
+                    print(f"[+] No portal sub-pages found. Processing directly.")
+                    if url not in expanded_root_urls:
+                        expanded_root_urls.append(url)
+            except Exception as e:
+                print(f"[-] Warning: Failed to pre-scan root URL {url}: {e}")
+                if url not in expanded_root_urls:
+                    expanded_root_urls.append(url)
+                    
+        print(f"[*] Total target URL(s) to process after time-filtering: {len(expanded_root_urls)}")
+        
+        # Process and crawl all streams
+        all_results = []
+        for root_url in expanded_root_urls:
+            results = process_root_url(root_url, max_depth=args.depth)
+            all_results.extend(results)
+        
+        # Format results to JavaScript objects for STREAM_LINKS with sorting by priority (DASH first, then HLS, etc.)
+        resolved_items = []
+        seen_urls = set()
+        
+        for res in all_results:
+            label_raw = res["label"]
+            details = res["details"]
+            
+            if not details or not details["streams"]:
+                print(f"[-] Skipping {label_raw}: No stream URL resolved.")
+                continue
+                
+            for s_idx, stream_url in enumerate(details["streams"], 1):
+                if stream_url in seen_urls:
+                    print(f"[-] Skipping duplicate stream URL for: {label_raw} (Stream {s_idx})")
+                    continue
+                seen_urls.add(stream_url)
+                
+                # Determine type of this specific stream
+                url_lower = stream_url.lower()
+                if ".mpd" in url_lower:
+                    s_type = "dash"
+                elif ".m3u8" in url_lower:
+                    s_type = "hls"
+                elif any(ext in url_lower for ext in [".mp4", ".webm", ".ogg", ".ts", ".mkv"]):
+                    s_type = "native"
+                else:
+                    s_type = "iframe"
+                    
+                # Clear keys only for DASH
+                s_keys = details["clear_keys"] if s_type == "dash" else {}
+                
+                # Parse badges from label contents or types
+                badges = [s_type]
+                label_lower = label_raw.lower()
+                if "hd" in label_lower or "hd" in stream_url.lower():
+                    badges.append("hd")
+                if "sd" in label_lower:
+                    badges.append("sd")
+                if "eng" in label_lower or "english" in label_lower:
+                    badges.append("eng")
+                if "ara" in label_lower or "arabic" in label_lower:
+                    badges.append("ara")
+                if "ios" in label_lower or "ios" in stream_url.lower() or "iphone" in label_lower:
+                    badges.append("ios")
+                    
+                badges = list(dict.fromkeys(badges))
+                
+                # Construct meta descriptive line
+                meta_parts = []
+                if s_type == "dash":
+                    meta_parts.append("MPEG-DASH")
+                elif s_type == "hls":
+                    meta_parts.append("HLS")
+                elif s_type == "iframe":
+                    meta_parts.append("HTML5 Embed")
+                else:
+                    meta_parts.append(s_type.upper())
+                    
+                meta_parts.append("Auto Quality")
+                
+                if "eng" in badges:
+                    meta_parts.append("English Audio")
+                elif "ara" in badges:
+                    meta_parts.append("Arabic Audio")
+                    
+                if s_keys:
+                    meta_parts.append("DRM ClearKey Protected")
+                    
+                resolved_items.append({
+                    "label_raw": label_raw,
+                    "root_target_url": res["root_target_url"],
+                    "root_origin_url": res.get("root_origin_url"),
+                    "stream_url": stream_url,
+                    "stream_type": s_type,
+                    "clear_keys": s_keys,
+                    "badges": badges,
+                    "meta_parts": meta_parts
+                })
+
+        # Sort resolved streams stably: DASH (0) -> HLS (1) -> Native (2) -> Iframe/Embed (3) -> Unknown (4)
+        def get_type_priority(item):
+            t = item["stream_type"]
+            if t == "dash":
+                return 0
+            elif t == "hls":
+                return 1
+            elif t == "native":
+                return 2
+            elif t == "iframe":
+                return 3
+            return 4
+
+        resolved_items.sort(key=get_type_priority)
+
+        # Label and build the final STREAM_LINKS array
+        stream_links_js = []
+        for idx, item in enumerate(resolved_items, 1):
+            label_raw = item["label_raw"]
+            stream_url = item["stream_url"]
+            stream_type = item["stream_type"]
+            clear_keys = item["clear_keys"]
+            badges = item["badges"]
+            meta_parts = item["meta_parts"]
+            
+            # Clean labels
+            match_title = get_clean_match_title(label_raw, item.get("root_origin_url") or item["root_target_url"])
+            if match_title:
+                clean_label = f"Link {idx} — {match_title}"
+            else:
+                if " | " in label_raw:
+                    parts = label_raw.split(" | ")
+                    if len(parts) >= 2:
+                        clean_label = f"Link {idx} — {parts[1]}"
+                elif label_raw.lower().startswith("link"):
+                    clean_label = re.sub(r"^Link\s*\d+", f"Link {idx}", label_raw, flags=re.IGNORECASE)
+                else:
+                    clean_label = f"Link {idx} — {label_raw}"
+                
+            meta_str = " · ".join(meta_parts)
+            
+            js_obj = {
+                "label": clean_label,
+                "meta": meta_str,
+                "badges": badges,
+                "type": stream_type,
+                "url": stream_url
+            }
+            if clear_keys:
+                js_obj["clearKeys"] = clear_keys
+                
+            stream_links_js.append(js_obj)
+            
+        # Serialize Python dictionary to JavaScript array format
+        js_array_str = "const STREAM_LINKS = " + json.dumps(stream_links_js, indent=2) + ";"
+        
+        # Replace placeholder inside HTML Template
+        output_html = HTML_TEMPLATE.replace("##STREAM_LINKS_PLACEHOLDER##", js_array_str)
+        
+        # Write output HTML file
+        try:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(output_html)
+            print(f"\n[+] SUCCESS: HTML Player generated successfully!")
+            print(f"[+] Output written to: {os.path.abspath(args.output)}")
+        except Exception as e:
+            print(f"[-] Error writing output HTML file: {e}", file=sys.stderr)
+            
+        # Generate standalone embeds and iframes.html
+        output_dir = os.path.dirname(os.path.abspath(args.output))
+        embeds_dir = os.path.join(output_dir, "embeds")
+        os.makedirs(embeds_dir, exist_ok=True)
+        
+        iframe_rows = []
+        for idx, item in enumerate(stream_links_js, 1):
+            url = item["url"]
+            stype = item["type"]
+            keys = item.get("clearKeys", {})
+            label = item["label"]
+            
+            # Write individual embed HTML file
+            filename = f"embed_{idx}.html"
+            filepath = os.path.join(embeds_dir, filename)
+            
+            content = EMBED_TEMPLATE.replace("{url_json}", json.dumps(url))
+            content = content.replace("{type_json}", json.dumps(stype))
+            content = content.replace("{keys_json}", json.dumps(keys))
+            content = content.replace("{title}", label)
+            
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
+                
+            iframe_tag = f'<iframe src="embeds/embed_{idx}.html" width="100%" height="450px" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>'
+            
+            iframe_rows.append(f"""
+            <div class="card">
+              <h3>{html.escape(label)}</h3>
+              <p>Format: {html.escape(item['meta'])}</p>
+              <code>{html.escape(iframe_tag)}</code>
+            </div>
+            """)
+            
+        # Write iframes.html
+        iframes_html_path = os.path.join(output_dir, "iframes.html")
+        iframes_content = IFRAMES_PAGE_TEMPLATE.format(stream_iframes="\n".join(iframe_rows))
+        try:
+            with open(iframes_html_path, "w", encoding="utf-8") as f:
+                f.write(iframes_content)
+            print(f"[+] SUCCESS: Iframes listing written to: {os.path.abspath(iframes_html_path)}")
+        except Exception as e:
+            print(f"[-] Error writing iframes listing: {e}", file=sys.stderr)
+            
+        if not args.loop:
+            break
+            
+        print(f"\n[*] Daemon mode active: sleeping for {args.interval} minute(s)...")
+        time.sleep(args.interval * 60)
 
 if __name__ == "__main__":
     main()

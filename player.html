@@ -609,74 +609,93 @@ input[type=range].vol-slider {
 </div><!-- /main -->
 
 <script>
+function initPlayerSystem() {
 /* ═══════════════════════════════════════════════════════════════
    STREAM LINKS CONFIG
 ═══════════════════════════════════════════════════════════════ */
 const STREAM_LINKS = [
   {
-    "label": "Link 1 \u2014 Spain vs Peru",
-    "meta": "MPEG-DASH \u00b7 Auto Quality \u00b7 DRM ClearKey Protected",
+    "label": "Link 1 \u2014 Auto Quality",
+    "meta": "HLS \u00b7 Auto Quality \u00b7 English Audio",
     "badges": [
-      "dash",
-      "hd"
+      "hls",
+      "eng"
     ],
-    "type": "dash",
-    "url": "https://otte.live.fly.ww.aiv-cdn.net/gru-nitro/live/clients/dash/enc/m7duvnk2bu/out/v1/d1ad69118b5647309b1eb7213affdb3d/cenc.mpd",
-    "clearKeys": {
-      "4bbcff3289d457b4dd5dbdd21221de9a": "c4906b9a9f8dda3c0725bddb8c497733"
-    }
+    "type": "hls",
+    "url": "https://live.ktooranb.cfd/argen1/index.m3u8"
   },
   {
-    "label": "Link 2 \u2014 Spain vs Peru",
+    "label": "Link 2 \u2014 iphone \ud83c\udf4e",
     "meta": "HLS \u00b7 Auto Quality",
     "badges": [
       "hls",
-      "hd"
+      "ios"
     ],
     "type": "hls",
-    "url": "https://live.666666.zip/live/4541786.m3u8"
+    "url": "https://live05.msdht.app/live/24561735.m3u8"
   },
   {
-    "label": "Link 3 \u2014 Spain vs Peru",
-    "meta": "HLS \u00b7 Auto Quality",
+    "label": "Link 3 \u2014 SD Quality",
+    "meta": "HTML5 Embed \u00b7 Auto Quality \u00b7 Arabic Audio",
     "badges": [
-      "hls",
-      "hd"
+      "iframe",
+      "sd",
+      "ara"
     ],
-    "type": "hls",
-    "url": "https://cinebolt.net/api/iptv-proxy?url=http://193.47.62.47/hls/KSSSQqqqqC.m3u8&referrer=http://www.fawanews.sc/&user_agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0"
+    "type": "iframe",
+    "url": "https://helloxsports.in/uefa/Cazetv.html"
   },
   {
-    "label": "Link 4 \u2014 Spain vs Peru",
-    "meta": "HLS \u00b7 Auto Quality",
+    "label": "Link 4 \u2014 High Quality",
+    "meta": "HTML5 Embed \u00b7 Auto Quality",
     "badges": [
-      "hls",
-      "hd"
+      "iframe"
     ],
-    "type": "hls",
-    "url": "https://pull.niues.live/live/stream-9912091.m3u8"
-  },
-  {
-    "label": "Link 5 \u2014 Spain vs Peru",
-    "meta": "HLS \u00b7 Auto Quality",
-    "badges": [
-      "hls",
-      "hd"
-    ],
-    "type": "hls",
-    "url": "https://hls.cdnfaster-b.site/live/GIANGPHUNGTIEN/index.m3u8?expire=1892388660&sign=307f59b7df73ce01272ff1281896bae9"
-  },
-  {
-    "label": "Link 6 \u2014 Spain vs Peru",
-    "meta": "HLS \u00b7 Auto Quality",
-    "badges": [
-      "hls",
-      "hd"
-    ],
-    "type": "hls",
-    "url": "https://live5.msrktz.app/live/97312754.m3u8"
+    "type": "iframe",
+    "url": "https://helloxsports.in/famcode/play.html?id=143344_ENGLISH"
   }
 ];
+
+// Initialize links status tracking
+STREAM_LINKS.forEach((lnk, i) => {
+  lnk.id = i;
+  lnk.failCount = 0;
+  lnk.success = false;
+});
+
+function sortAndRebuildLinks() {
+  const activeId = STREAM_LINKS[activeIndex] ? STREAM_LINKS[activeIndex].id : null;
+  
+  STREAM_LINKS.sort((a, b) => {
+    const aFailed = a.failCount > 0;
+    const bFailed = b.failCount > 0;
+    
+    // Put failed ones at the bottom, sorted by failCount ascending
+    if (aFailed && !bFailed) return 1;
+    if (!aFailed && bFailed) return -1;
+    if (aFailed && bFailed) {
+      if (a.failCount !== b.failCount) {
+        return a.failCount - b.failCount;
+      }
+    }
+    
+    // Put successful ones at the top
+    if (a.success && !b.success) return -1;
+    if (!a.success && b.success) return 1;
+    
+    // Keep original python priority
+    return a.id - b.id;
+  });
+  
+  if (activeId !== null) {
+    activeIndex = STREAM_LINKS.findIndex(l => l.id === activeId);
+  }
+  
+  buildLinks();
+  if (activeIndex !== -1) {
+    setActive(activeIndex);
+  }
+}
 
 /* ═══════════════════════════════════════════════════════════════
    ENGINE DETECTION
@@ -812,25 +831,64 @@ function showError(msg) {
   ovLoad.classList.add('hidden');
   errMsg.textContent = msg || 'Stream could not be loaded.';
   ovErr.classList.remove('hidden');
-  const next = STREAM_LINKS.findIndex((l, i) => i > activeIndex && l.url);
-  retryBtn.textContent = next !== -1 ? '▶ Try Next Link' : '🔄 Refresh';
+  
+  // Find next link before sorting
+  let nextIdx = -1;
+  let nextId = null;
+  
+  let nextUntried = STREAM_LINKS.findIndex((l, i) => i !== activeIndex && l.failCount === 0 && l.url);
+  if (nextUntried !== -1) {
+    nextIdx = nextUntried;
+  } else {
+    let minFail = Infinity;
+    let bestIdx = -1;
+    STREAM_LINKS.forEach((l, i) => {
+      if (i !== activeIndex && l.url) {
+        if (l.failCount < minFail) {
+          minFail = l.failCount;
+          bestIdx = i;
+        }
+      }
+    });
+    nextIdx = bestIdx;
+  }
+  
+  if (nextIdx !== -1) {
+    nextId = STREAM_LINKS[nextIdx].id;
+  }
+
+  // Update failure score
+  const activeLnk = STREAM_LINKS[activeIndex];
+  if (activeLnk) {
+    activeLnk.failCount++;
+    activeLnk.success = false;
+    sortAndRebuildLinks();
+  }
+
+  // Find the new index of next after sorting
+  let finalNextIdx = -1;
+  if (nextId !== null) {
+    finalNextIdx = STREAM_LINKS.findIndex(l => l.id === nextId);
+  }
+
+  retryBtn.textContent = finalNextIdx !== -1 ? '▶ Try Next Link' : '🔄 Refresh';
   setStatus('error', 'Stream error');
   setEngineBadge('none');
   
-  if (next !== -1) {
+  if (finalNextIdx !== -1) {
     clearTimeout(autoswitchTimeout);
     ovLoadMsg.textContent = 'Stream error. Autoswitching to next link...';
     ovLoad.classList.remove('hidden');
     ovErr.classList.add('hidden');
     autoswitchTimeout = setTimeout(() => {
-      switchStream(next);
+      switchStream(finalNextIdx);
     }, 3000);
   }
 }
 
 /* ═══════════════════════════════════════════════════════════════
    IFRAME MODE
-═══════════════════════════════════════════════════════════════ */
+ ═══════════════════════════════════════════════════════════════ */
 function loadIframe(url) {
   buildEngineTries(['iframe']);
   setEngineTry('iframe', 'trying');
@@ -845,6 +903,14 @@ function loadIframe(url) {
     setEngineTry('iframe', 'success');
     setEngineBadge('iframe');
     setStatus('live', 'Embed loaded');
+    
+    // Mark success
+    const activeLnk = STREAM_LINKS[activeIndex];
+    if (activeLnk) {
+      activeLnk.success = true;
+      activeLnk.failCount = 0;
+      sortAndRebuildLinks();
+    }
   };
   iframeEl.onerror = () => {
     showError('Could not load the embed. Try another link.');
@@ -856,6 +922,13 @@ function loadIframe(url) {
       setEngineBadge('iframe');
       setStatus('live', 'Embed loaded');
       setEngineTry('iframe', 'success');
+      
+      const activeLnk = STREAM_LINKS[activeIndex];
+      if (activeLnk) {
+        activeLnk.success = true;
+        activeLnk.failCount = 0;
+        sortAndRebuildLinks();
+      }
     }
   }, 4000);
 }
@@ -1129,6 +1202,14 @@ video.addEventListener('playing', () => {
     setEngineBadge('native');
     setEngineTry('native', 'success');
   }
+  
+  // Mark success
+  const activeLnk = STREAM_LINKS[activeIndex];
+  if (activeLnk) {
+    activeLnk.success = true;
+    activeLnk.failCount = 0;
+    sortAndRebuildLinks();
+  }
 });
 video.addEventListener('stalled', () => setStatus('buffer', 'Stream stalled...'));
 video.addEventListener('error',   () => {
@@ -1183,8 +1264,24 @@ vwrap.addEventListener('touchstart', () => {
    RETRY
 ═══════════════════════════════════════════════════════════════ */
 retryBtn.addEventListener('click', () => {
-  const next = STREAM_LINKS.findIndex((l, i) => i > activeIndex && l.url);
-  if (next !== -1) switchStream(next);
+  let nextIdx = -1;
+  let nextUntried = STREAM_LINKS.findIndex((l, i) => i !== activeIndex && l.failCount === 0 && l.url);
+  if (nextUntried !== -1) {
+    nextIdx = nextUntried;
+  } else {
+    let minFail = Infinity;
+    let bestIdx = -1;
+    STREAM_LINKS.forEach((l, i) => {
+      if (i !== activeIndex && l.url) {
+        if (l.failCount < minFail) {
+          minFail = l.failCount;
+          bestIdx = i;
+        }
+      }
+    });
+    nextIdx = bestIdx;
+  }
+  if (nextIdx !== -1) switchStream(nextIdx);
   else location.reload();
 });
 
@@ -1273,6 +1370,14 @@ if (paramUrl) {
     setStatus('', 'No stream URL');
   }
 }
+function bootstrapPlayer() {
+  if (document.getElementById('links-list') && document.getElementById('video')) {
+    initPlayerSystem();
+  } else {
+    setTimeout(bootstrapPlayer, 50);
+  }
+}
+bootstrapPlayer();
 </script>
 </body>
 </html>
