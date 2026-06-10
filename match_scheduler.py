@@ -165,6 +165,7 @@ def check_and_run():
                         
                     print(f"[+] Blogger page updated successfully! URL: {post_url}")
                     match["blogger_post_url"] = post_url
+                    match["iframe_embed_code"] = f'<iframe src="{post_url}" width="100%" height="480px" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="background:#000;"></iframe>'
                     match["status"] = "completed"
                 except Exception as e:
                     print(f"[-] Blogger upload failed: {e}")

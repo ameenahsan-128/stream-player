@@ -9,7 +9,7 @@ import requests
 
 CONFIG_FILE = "blogger_config.json"
 PORT = 8080
-REDIRECT_URI = f"http://localhost:{PORT}/"
+REDIRECT_URI = f"http://localhost:{PORT}"
 
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):
