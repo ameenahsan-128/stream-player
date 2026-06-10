@@ -2099,6 +2099,26 @@ def main():
         print(f"[*] Pipeline iteration started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"==================================================")
         
+        # Clear previously generated files
+        import shutil
+        output_dir = os.path.dirname(os.path.abspath(args.output))
+        embeds_dir = os.path.join(output_dir, "embeds")
+        iframes_html_path = os.path.join(output_dir, "iframes.html")
+        
+        print("[*] Clearing previously generated files...")
+        for path in [args.output, iframes_html_path]:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    print(f"[-] Warning: could not remove {path}: {e}")
+                    
+        if os.path.exists(embeds_dir):
+            try:
+                shutil.rmtree(embeds_dir)
+            except Exception as e:
+                print(f"[-] Warning: could not remove directory {embeds_dir}: {e}")
+        
         expanded_root_urls = []
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
         
