@@ -1241,6 +1241,9 @@ video.addEventListener('error',   () => {
 
 const LIVE_THRESHOLD = 3600 * 10;
 function isLive() {
+  return !isFinite(video.duration) || video.duration > LIVE_THRESHOLD;
+}
+
 video.addEventListener('timeupdate', () => {
   if (isLive()) {
     progBar.style.width = '100%';
@@ -1390,6 +1393,7 @@ if (paramUrl) {
     ovNone.classList.remove('hidden');
     setStatus('', 'No stream URL');
   }
+}
   } catch (e) {
     console.error(e);
     const errDiv = document.createElement('div');
