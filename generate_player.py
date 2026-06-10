@@ -671,6 +671,7 @@ input[type=range].vol-slider {
 
 <script>
 function initPlayerSystem() {
+  try {
 /* ═══════════════════════════════════════════════════════════════
    STREAM LINKS CONFIG
 ═══════════════════════════════════════════════════════════════ */
@@ -1388,6 +1389,13 @@ if (paramUrl) {
     ovLoad.classList.add('hidden');
     ovNone.classList.remove('hidden');
     setStatus('', 'No stream URL');
+  }
+  } catch (e) {
+    console.error(e);
+    const errDiv = document.createElement('div');
+    errDiv.style = "color:red; background:#fff; padding:20px; position:fixed; bottom:0; left:0; width:100%; z-index:999999; border-top:5px solid red; font-family:monospace; font-size:12px; overflow:auto; max-height:200px;";
+    errDiv.innerHTML = '<strong>JavaScript Error:</strong> ' + e.message + '<br><pre>' + e.stack + '</pre>';
+    document.body.appendChild(errDiv);
   }
 }
 function bootstrapPlayer() {
