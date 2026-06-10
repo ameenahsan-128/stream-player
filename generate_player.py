@@ -1399,10 +1399,26 @@ if (paramUrl) {
   }
 }
 function bootstrapPlayer() {
-  if (document.getElementById('links-list') && document.getElementById('video')) {
+  const l = document.getElementById('links-list');
+  const v = document.getElementById('video');
+  
+  let diag = document.getElementById('diag-debug');
+  if (!diag) {
+    diag = document.createElement('div');
+    diag.id = 'diag-debug';
+    diag.style = 'background:yellow; color:black; padding:10px; position:fixed; top:0; left:0; z-index:9999999; font-size:12px; font-family:monospace; border:1px solid #000;';
+    document.body.appendChild(diag);
+  }
+  diag.innerHTML = 'Debug — LinksList: ' + (l ? 'FOUND' : 'NULL') + ' | Video: ' + (v ? 'FOUND' : 'NULL');
+
+  if (l && v) {
+    diag.innerHTML += ' => Initializing...';
+    setTimeout(() => {
+      if (diag) diag.style.display = 'none'; // hide debug banner after successful init
+    }, 2000);
     initPlayerSystem();
   } else {
-    setTimeout(bootstrapPlayer, 50);
+    setTimeout(bootstrapPlayer, 100);
   }
 }
 bootstrapPlayer();
