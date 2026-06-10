@@ -50,6 +50,24 @@ def update_blogger_post(config, access_token, post_id, title, html_content):
     response.raise_for_status()
     return response.json().get("url")
 
+def create_blogger_post(config, access_token, title, html_content):
+    blog_id = config.get("blog_id")
+    url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "kind": "blogger#post",
+        "blog": {"id": blog_id},
+        "title": title,
+        "content": html_content
+    }
+    response = requests.post(url, headers=headers, json=payload, timeout=20)
+    response.raise_for_status()
+    res_data = response.json()
+    return res_data.get("id"), res_data.get("url")
+
 def parse_time(time_str):
     if time_str.endswith("Z"):
         time_str = time_str[:-1] + "+00:00"
@@ -108,11 +126,22 @@ def check_and_run():
                 continue
 
             # Step 2: Push to Blogger if OAuth is set up
-            if has_oauth and match.get("blogger_post_id") and not match["blogger_post_id"].startswith("YOUR_"):
+            if has_oauth:
                 try:
-                    print(f"[*] Fetching access token and updating Blogger post {match['blogger_post_id']}...")
+                    print(f"[*] Fetching access token...")
                     token = get_access_token(config)
-                    post_url = update_blogger_post(config, token, match["blogger_post_id"], match["match_name"] + " Live Stream", player_html)
+                    post_title = match["match_name"] + " Live Stream"
+                    
+                    post_id = match.get("blogger_post_id")
+                    if post_id and not post_id.startswith("YOUR_") and post_id.strip():
+                        print(f"[*] Updating existing Blogger post {post_id}...")
+                        post_url = update_blogger_post(config, token, post_id, post_title, player_html)
+                    else:
+                        print(f"[*] Creating a NEW Blogger post...")
+                        post_id, post_url = create_blogger_post(config, token, post_title, player_html)
+                        match["blogger_post_id"] = post_id
+                        print(f"[+] Created new Blogger post with ID: {post_id}")
+                        
                     print(f"[+] Blogger page updated successfully! URL: {post_url}")
                     match["blogger_post_url"] = post_url
                     match["status"] = "completed"
@@ -120,7 +149,7 @@ def check_and_run():
                     print(f"[-] Blogger upload failed: {e}")
                     match["status"] = "failed"
             else:
-                print("[!] Blogger OAuth or Post ID not fully configured. Storing player HTML locally only.")
+                print("[!] Blogger OAuth not fully configured. Storing player HTML locally only.")
                 match["status"] = "completed_local"
             
             changed = True
