@@ -429,24 +429,58 @@ input[type=range].vol-slider {
 .link-play-icon svg { width: 18px; height: 18px; fill: currentColor; }
 
 .ad-mid { text-align:center; margin: 14px 0; }
-.socials { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.socials {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 16px 0;
+}
 .soc-btn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border-radius: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 20px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 700;
   text-decoration: none;
   color: #fff;
   font-family: 'Rajdhani', sans-serif;
-  transition: opacity 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  cursor: pointer;
 }
-.soc-btn:hover { opacity: 0.85; }
-.soc-btn.wa  { background: #128C7E; }
-.soc-btn.wac { background: #25D366; }
-.soc-btn.tg  { background: #0088cc; }
+.soc-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+  opacity: 0.95;
+}
+.soc-btn.wa {
+  background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+  animation: pulse-green 2s infinite;
+}
+.soc-btn.tg {
+  background: linear-gradient(135deg, #0088cc 0%, #006699 100%);
+  animation: pulse-blue 2s infinite;
+}
+@keyframes pulse-green {
+  0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); }
+}
+@keyframes pulse-blue {
+  0% { box-shadow: 0 0 0 0 rgba(0, 136, 204, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(0, 136, 204, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 136, 204, 0); }
+}
+@media(max-width:480px) {
+  .socials {
+    grid-template-columns: 1fr;
+  }
+}
 .disclaimer {
   background: rgba(255,255,255,0.02);
   border: 1px solid var(--border);
@@ -525,7 +559,7 @@ input[type=range].vol-slider {
 
 <div class="alert-bar">
   <strong>🛑 ALERT</strong> — Wait <strong>20 seconds</strong> for the stream to load.
-  Join our <a href="https://whatsapp.com/channel/0029VbBrULX30LKYjSCtrT10" target="_blank">WhatsApp Group</a> for daily live links 👇
+  Join our <a href="#" onclick="goSomewhere(); return false;">WhatsApp Group</a> for daily live links 👇
 </div>
 
 <div class="ad-top"><!-- TOP AD CODE HERE --></div>
@@ -653,9 +687,18 @@ input[type=range].vol-slider {
   </div>
 
   <div class="socials">
-    <a href="https://whatsapp.com/channel/0029VbBrULX30LKYjSCtrT10" target="_blank" rel="noopener" class="soc-btn wa">💬 WhatsApp Group</a>
-    <a href="YOUR_WHATSAPP_CHANNEL_LINK" target="_blank" rel="noopener" class="soc-btn wac">📢 WhatsApp Channel</a>
-    <a href="https://t.me/+3Xrk9OJsuT44YjQ1" target="_blank" rel="noopener" class="soc-btn tg">✈️ Telegram</a>
+    <a href="#" onclick="goSomewhere(); return false;" class="soc-btn wa">
+      <svg style="width:18px; height:18px; fill:currentColor" viewBox="0 0 24 24">
+        <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.514 2.266 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.724-1.455L0 24zm6.59-4.846c1.66.986 3.298 1.448 5.355 1.449 5.883 0 10.675-4.76 10.677-10.606.002-2.833-1.107-5.498-3.127-7.52-2.02-2.022-4.704-3.136-7.54-3.137-5.887 0-10.683 4.761-10.686 10.61 0 2.235.632 4.04 1.766 5.887l-.999 3.647 3.854-.993zm11.381-4.708c-.307-.154-1.82-.899-2.102-1.002-.282-.102-.487-.154-.692.154-.205.308-.795 1.002-.974 1.205-.18.206-.36.23-.667.077-.307-.154-1.297-.477-2.472-1.528-.915-.817-1.533-1.828-1.713-2.136-.18-.308-.02-.475.134-.628.14-.137.307-.359.461-.54.154-.179.206-.308.308-.513.102-.206.051-.385-.026-.54-.077-.154-.692-1.67-.949-2.285-.25-.602-.503-.519-.692-.53l-.59-.011c-.205 0-.538.077-.82.385-.282.308-1.077 1.051-1.077 2.562 0 1.513 1.102 2.975 1.256 3.18 1.532 2.054 3.393 3.197 5.258 3.829 1.865.63 2.72.76 3.655.62.934-.14 2.102-.859 2.397-1.692.296-.834.296-1.547.207-1.693-.089-.147-.282-.25-.59-.404z"/>
+      </svg>
+      WhatsApp Group
+    </a>
+    <a href="#" onclick="telewhere(); return false;" class="soc-btn tg">
+      <svg style="width:18px; height:18px; fill:currentColor" viewBox="0 0 24 24">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.11.02-1.93 1.23-5.46 3.62-.51.35-.98.53-1.4.52-.46-.01-1.35-.26-2.01-.48-.81-.27-1.46-.42-1.4-.88.03-.24.36-.49.98-.74 3.82-1.66 6.37-2.75 7.63-3.27 3.63-1.49 4.38-1.75 4.88-1.76.11 0 .35.03.51.16.13.11.17.26.19.37.02.13.02.26.01.39z"/>
+      </svg>
+      Telegram Group
+    </a>
   </div>
 
   <div class="disclaimer">
@@ -670,6 +713,34 @@ input[type=range].vol-slider {
 </div><!-- /main -->
 
 <script>
+var urls = [
+    'https://chat.whatsapp.com/E9UG7hmlObr61yTP1CjvAk',
+    'https://chat.whatsapp.com/KdNRt4WCQClLMmudKqe8Eg',
+    'https://chat.whatsapp.com/BfN4WNiLpjUJFtJbUys0nk',
+    'https://chat.whatsapp.com/Gm93HsMZDog9ExQ3KT9ED1',
+    'https://chat.whatsapp.com/CxQ3yYdEqGu0dC5mpaFKZY',
+    'https://chat.whatsapp.com/KmtHD4EPBe424XzohKqxSn',
+    'https://chat.whatsapp.com/C54sNsV9o3X8MMlYJLzCRC'
+];
+
+function goSomewhere() {
+    var url = urls[Math.floor(Math.random()*urls.length)];
+    window.open(url, '_blank');
+}
+
+var urlss = [
+    'https://t.me/+43_hofAviBs4YWJl',
+    'https://t.me/+pbS2o7aYwe04N2Nl',
+    'https://t.me/+BRroGwpg2wJiZGZl',
+    'https://t.me/+ItWztH1Rb6MxNDU1',
+    'https://t.me/+3Xrk9OJsuT44YjQ1'
+];
+
+function telewhere() {
+    var url = urlss[Math.floor(Math.random()*urlss.length)];
+    window.open(url, '_blank');
+}
+
 function initPlayerSystem() {
   try {
 /* ═══════════════════════════════════════════════════════════════
