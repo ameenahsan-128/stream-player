@@ -1435,9 +1435,12 @@ bootstrapPlayer();
 # ----------------------------------------------------------------------
 def is_match_page_url(url, text):
     u = url.lower()
-    t = text.lower()
+    t = text.lower().strip()
     # Exclude profile, labels or feed URLs
     if any(p in u for p in ["/privacy", "/contact", "/about", "/disclaimer", "/terms", "/search/label", "feed", "blogger.com", "whatsapp.com", "t.me", "telegram"]):
+        return False
+    # Exclude stream link buttons starting with "link" from being treated as match pages
+    if t.startswith("link"):
         return False
     # Check for match indicators
     match_indicators = ["vs", " v ", "live", "watch", "stream", "score", "match", "friendly", "telecast", "preview", "lineup"]
