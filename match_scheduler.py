@@ -102,31 +102,52 @@ def write_direct_links(match_name, post_url, player_html):
         return
     try:
         links_data = json.loads(match_data.group(1))
+        
+        # 1. Plain text format
         lines = []
         lines.append(f"==================================================")
         lines.append(f" DIRECT STREAM LINKS FOR: {match_name.upper()}")
         lines.append(f" Blogger Page: {post_url}")
         lines.append(f"==================================================\n")
         
+        # 2. HTML format
+        html_lines = []
+        html_lines.append(f"<h3>Direct Stream Links for: {match_name.upper()}</h3>")
+        html_lines.append(f"<p>Blogger Page: <a href='{post_url}' target='_blank'>{post_url}</a></p>")
+        html_lines.append("<ul>")
+        
         for idx, lnk in enumerate(links_data):
             label = lnk.get("label", f"Link {idx + 1}")
             meta = lnk.get("meta", "")
             direct_url = f"{post_url}?link={idx + 1}"
+            
+            # Plain text
             lines.append(f"{idx + 1}. {label} ({meta})")
             lines.append(f"   Link: {direct_url}\n")
             
-        content = "\n".join(lines)
+            # HTML anchor
+            display_meta = f" - {meta}" if meta else ""
+            html_lines.append(f"  <li><a href='{direct_url}' target='_blank'><strong>{label}</strong></a>{display_meta}</li>")
+            
+        html_lines.append("</ul>")
         
-        # Write to common file (latest)
+        content = "\n".join(lines)
+        html_content = "\n".join(html_lines)
+        
+        # Write plain text formats
         with open("direct_links_list.txt", "w", encoding="utf-8") as f:
             f.write(content)
-            
-        # Write to match specific file
         safe_name = match_name.replace(' ', '_').lower()
         with open(f"links_{safe_name}.txt", "w", encoding="utf-8") as f:
             f.write(content)
             
-        print(f"[+] Direct links list successfully written to direct_links_list.txt and links_{safe_name}.txt")
+        # Write HTML formats
+        with open("direct_links_list.html", "w", encoding="utf-8") as f:
+            f.write(html_content)
+        with open(f"links_{safe_name}.html", "w", encoding="utf-8") as f:
+            f.write(html_content)
+            
+        print(f"[+] Direct links list successfully written to plain text and HTML list files for {match_name}")
         print(content)
     except Exception as e:
         print(f"[-] Error writing direct links list: {e}")
