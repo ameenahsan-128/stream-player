@@ -112,21 +112,75 @@ def write_direct_links(match_name, post_url, player_html):
         # 2. HTML format (clean list of paragraph links similar to RD9 Sports, styled for dark backgrounds)
         html_lines = []
         html_lines.append('<div style="font-family:\'Segoe UI\',Roboto,Helvetica,sans-serif; max-width:650px; margin: 15px auto;">')
+        html_lines.append('  <style>')
+        html_lines.append('    .stream-btn {')
+        html_lines.append('      display: inline-block;')
+        html_lines.append('      width: 100%;')
+        html_lines.append('      max-width: 550px;')
+        html_lines.append('      padding: 14px 20px;')
+        html_lines.append('      background: #161a22;')
+        html_lines.append('      color: #00a8ff;')
+        html_lines.append('      text-decoration: none;')
+        html_lines.append('      font-family: \'Segoe UI\', sans-serif;')
+        html_lines.append('      font-size: 15px;')
+        html_lines.append('      font-weight: bold;')
+        html_lines.append('      border-radius: 8px;')
+        html_lines.append('      border: 1px solid #232730;')
+        html_lines.append('      text-align: left;')
+        html_lines.append('      box-sizing: border-box;')
+        html_lines.append('      transition: all 0.2s ease-in-out;')
+        html_lines.append('      margin-bottom: 12px;')
+        html_lines.append('    }')
+        html_lines.append('    .stream-btn:hover {')
+        html_lines.append('      background: #1f2430;')
+        html_lines.append('      border-color: #00a8ff;')
+        html_lines.append('      color: #fff;')
+        html_lines.append('      box-shadow: 0 4px 12px rgba(0, 168, 255, 0.2);')
+        html_lines.append('    }')
+        html_lines.append('  </style>')
         
         for idx, lnk in enumerate(links_data[:7]):
-            label = lnk.get("label", f"Link {idx + 1}")
+            label = lnk.get("label", "")
             meta = lnk.get("meta", "")
             direct_url = f"{post_url}?link={idx + 1}"
             
+            # Extract Quality
+            label_lower = label.lower()
+            meta_lower = meta.lower()
+            if "hd" in label_lower or "hd" in meta_lower:
+                quality = "HD"
+            elif "sd" in label_lower or "sd" in meta_lower:
+                quality = "SD"
+            else:
+                quality = "Auto Quality"
+                
+            # Extract Format
+            if "dash" in meta_lower or "mpeg-dash" in meta_lower or "dash" in label_lower:
+                fmt = "DASH"
+            elif "hls" in meta_lower or "hls" in label_lower:
+                fmt = "HLS"
+            elif "youtube" in meta_lower or "yt" in meta_lower or "yt" in label_lower:
+                fmt = "YT"
+            else:
+                fmt = "Direct"
+                
+            # Extract Language
+            if "ara" in label_lower or "arabic" in label_lower or "arabic" in meta_lower:
+                lang = "ARA"
+            elif "esp" in label_lower or "spanish" in label_lower or "spanish" in meta_lower:
+                lang = "ESP"
+            else:
+                lang = "ENG" # Default language
+                
+            # Construct button label starting with match name
+            btn_label = f"{match_name} — Link {idx + 1} | {quality} | {fmt} | {lang}"
+            
             # Plain text
-            lines.append(f"{idx + 1}. {label} ({meta})")
+            lines.append(f"{idx + 1}. {btn_label}")
             lines.append(f"   Link: {direct_url}\n")
             
-            # HTML anchor formatted like RD9 Sports links
-            display_meta = f" | {meta}" if meta else ""
-            html_lines.append(f'  <p style="margin: 0 0 14px 0;">')
-            html_lines.append(f'    <a href="{direct_url}" target="_blank" style="color:#00a8ff; text-decoration:none; font-size:15px; font-weight:bold; transition:color 0.2s;">{label}{display_meta}</a>')
-            html_lines.append(f'  </p>')
+            # HTML anchor formatted like a button
+            html_lines.append(f'  <a class="stream-btn" href="{direct_url}" target="_blank">{btn_label}</a>')
             
         html_lines.append("</div>")
         
