@@ -107,15 +107,11 @@ def write_direct_links(match_name, post_url, player_html):
         lines = []
         lines.append(f"==================================================")
         lines.append(f" DIRECT STREAM LINKS FOR: {match_name.upper()}")
-        lines.append(f" Blogger Page: {post_url}")
         lines.append(f"==================================================\n")
         
-        # 2. HTML format (optimized for dark backgrounds)
+        # 2. HTML format (clean list of paragraph links similar to RD9 Sports, styled for dark backgrounds)
         html_lines = []
-        html_lines.append(f'<div style="background:#0f1115; border:1px solid #232730; border-radius:10px; padding:20px; font-family:\'Segoe UI\',Roboto,Helvetica,sans-serif; color:#eee; max-width:650px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); margin: 20px auto;">')
-        html_lines.append(f'  <h3 style="margin-top:0; color:#fff; font-size:18px; border-bottom:1px solid #232730; padding-bottom:10px; text-transform:uppercase; letter-spacing:0.5px;">Direct Stream Links: {match_name.upper()}</h3>')
-        html_lines.append(f'  <p style="font-size:13px; color:#aaa; margin-bottom:18px;">Blogger Page: <a href="{post_url}" target="_blank" style="color:#25D366; text-decoration:none; font-weight:600;">{post_url}</a></p>')
-        html_lines.append('  <ul style="list-style:none; padding:0; margin:0;">')
+        html_lines.append('<div style="font-family:\'Segoe UI\',Roboto,Helvetica,sans-serif; max-width:650px; margin: 15px auto;">')
         
         for idx, lnk in enumerate(links_data[:7]):
             label = lnk.get("label", f"Link {idx + 1}")
@@ -126,14 +122,12 @@ def write_direct_links(match_name, post_url, player_html):
             lines.append(f"{idx + 1}. {label} ({meta})")
             lines.append(f"   Link: {direct_url}\n")
             
-            # HTML item optimized for dark backgrounds
-            display_meta = meta if meta else "Live Link"
-            html_lines.append(f'    <li style="margin-bottom:10px; padding:12px 16px; background:#161a22; border:1px solid #232730; border-radius:6px; font-size:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">')
-            html_lines.append(f'      <a href="{direct_url}" target="_blank" style="color:#0088cc; text-decoration:none; font-weight:700;">{label}</a>')
-            html_lines.append(f'      <span style="font-size:12px; color:#888;">{display_meta}</span>')
-            html_lines.append(f'    </li>')
+            # HTML anchor formatted like RD9 Sports links
+            display_meta = f" | {meta}" if meta else ""
+            html_lines.append(f'  <p style="margin: 0 0 14px 0;">')
+            html_lines.append(f'    <a href="{direct_url}" target="_blank" style="color:#00a8ff; text-decoration:none; font-size:15px; font-weight:bold; transition:color 0.2s;">{label}{display_meta}</a>')
+            html_lines.append(f'  </p>')
             
-        html_lines.append("  </ul>")
         html_lines.append("</div>")
         
         html_content = "\n".join(html_lines)
