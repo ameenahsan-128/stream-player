@@ -64,6 +64,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="googlebot" content="noindex, nofollow">
 <title>Live Player</title>
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
 
@@ -511,6 +513,68 @@ input[type=range].vol-slider {
   .link-label { font-size: 12px; }
   .type-legend { display: none; }
 }
+
+.prominent-telegram-banner {
+  background: linear-gradient(90deg, #0088cc, #25D366);
+  border-radius: 10px;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  margin: 14px 0;
+  box-shadow: 0 4px 15px rgba(0, 136, 204, 0.3);
+  transition: transform 0.2s, box-shadow 0.2s;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.prominent-telegram-banner:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 136, 204, 0.4);
+}
+.prominent-telegram-banner .glow-effect {
+  position: absolute;
+  top: -50%; left: -50%;
+  width: 200%; height: 200%;
+  background: radial-gradient(circle, rgba(255,255,255,0.15) 0%, transparent 60%);
+  animation: rotation 6s linear infinite;
+}
+@keyframes rotation { to { transform: rotate(360deg); } }
+.banner-icon { font-size: 24px; margin-right: 12px; z-index: 1; }
+.banner-body { flex: 1; display: flex; flex-direction: column; z-index: 1; text-align: left; }
+.banner-title { font-family: 'Rajdhani', sans-serif; font-size: 15px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
+.banner-desc { font-size: 11.5px; color: rgba(255,255,255,0.9); margin-top: 2px; }
+.arrow-icon { font-size: 18px; color: #fff; font-weight: bold; z-index: 1; animation: slideArrow 1.2s infinite; }
+@keyframes slideArrow { 0%,100%{transform:translateX(0)} 50%{transform:translateX(4px)} }
+
+.socials-prominent { margin: 16px 0; }
+.soc-btn-prom {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 20px;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s, filter 0.2s;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  letter-spacing: 0.5px;
+}
+.soc-btn-prom:hover { transform: translateY(-1px); filter: brightness(1.1); }
+.tg-gradient {
+  background: linear-gradient(90deg, #0088cc, #24b47e, #25D366);
+  background-size: 200% auto;
+  animation: gradientMove 3s linear infinite;
+}
+@keyframes gradientMove { 0% { background-position: 0% 50% } 50% { background-position: 100% 50% } 100% { background-position: 0% 50% } }
+.soc-btn-prom svg { width: 22px; height: 22px; fill: currentColor; }
 </style>
 </head>
 <body>
@@ -525,12 +589,23 @@ input[type=range].vol-slider {
 
 <div class="alert-bar">
   <strong>🛑 ALERT</strong> — Wait <strong>20 seconds</strong> for the stream to load.
-  Join our <a href="https://whatsapp.com/channel/0029VbBrULX30LKYjSCtrT10" target="_blank">WhatsApp Group</a> for daily live links 👇
+  Join our <a href="#" onclick="telewhere(); return false;">Telegram</a> / <a href="#" onclick="whatsappwhere(); return false;">WhatsApp</a> Channels for daily live links 👇
 </div>
 
 <div class="ad-top"><!-- TOP AD CODE HERE --></div>
 
 <div class="main">
+
+  <!-- Prominent Social Banner -->
+  <div class="prominent-telegram-banner" onclick="combinedwhere()">
+    <div class="glow-effect"></div>
+    <div class="banner-icon">📢</div>
+    <div class="banner-body">
+      <span class="banner-title">JOIN BACKUP CHANNELS</span>
+      <span class="banner-desc">Click here to join Telegram & WhatsApp for Auto-Update links!</span>
+    </div>
+    <div class="arrow-icon">➔</div>
+  </div>
 
   <div class="player-card">
     <div class="video-wrap" id="vwrap">
@@ -625,15 +700,6 @@ input[type=range].vol-slider {
     <div class="stream-links-list" id="links-list"></div>
   </div>
 
-  <!-- ══ EMBED PLAYER ── -->
-  <div class="embed-box" id="embed-section">
-    <div class="embed-header">
-      <span>🔗 Embed Code</span>
-      <button class="copy-embed-btn" id="copy-embed-btn">📋 Copy Code</button>
-    </div>
-    <input type="text" class="embed-input" id="embed-input" readonly value="">
-  </div>
-
   <!-- Popup Ad -->
   <div class="ad-mid">
     <div id="popup-ad-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:99999; justify-content:center; align-items:center;">
@@ -652,10 +718,15 @@ input[type=range].vol-slider {
     </script>
   </div>
 
-  <div class="socials">
-    <a href="https://whatsapp.com/channel/0029VbBrULX30LKYjSCtrT10" target="_blank" rel="noopener" class="soc-btn wa">💬 WhatsApp Group</a>
-    <a href="YOUR_WHATSAPP_CHANNEL_LINK" target="_blank" rel="noopener" class="soc-btn wac">📢 WhatsApp Channel</a>
-    <a href="https://t.me/+3Xrk9OJsuT44YjQ1" target="_blank" rel="noopener" class="soc-btn tg">✈️ Telegram</a>
+  <div class="socials-prominent" style="display: flex; flex-direction: column; gap: 10px;">
+    <button onclick="telewhere()" class="soc-btn-prom tg-gradient">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.12.02-1.96 1.25-5.54 3.69-.52.36-1 .53-1.42.52-.47-.01-1.37-.26-2.03-.48-.82-.27-1.47-.42-1.42-.88.03-.24.35-.49.97-.74 3.79-1.65 6.32-2.74 7.57-3.27 3.61-1.53 4.36-1.8 4.85-1.8.11 0 .35.03.5.15.13.1.17.25.18.37s-.01.28-.02.34z"/></svg>
+      Join Our Backup Telegram Channel (Click Here)
+    </button>
+    <button onclick="whatsappwhere()" class="soc-btn-prom tg-gradient" style="background: linear-gradient(90deg, #25D366, #128C7E);">
+      <svg viewBox="0 0 24 24" style="fill: #fff; width: 22px; height: 22px; margin-right: 2px;"><path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.513 2.262 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.5-5.739-1.446L0 24zm6.59-4.846c1.6.95 3.188 1.449 4.825 1.451 5.436 0 9.86-4.37 9.864-9.799.002-2.63-1.023-5.101-2.885-6.965C16.588 1.977 14.113.953 11.487.953c-5.43 0-9.85 4.37-9.854 9.799 0 1.83.5 3.609 1.45 5.216L2.08 21.39l4.566-1.236z"/></svg>
+      Join Our Backup WhatsApp Channel (Click Here)
+    </button>
   </div>
 
   <div class="disclaimer">
@@ -669,7 +740,35 @@ input[type=range].vol-slider {
 
 </div><!-- /main -->
 
-<script>
+<script type="text/javascript">
+var telegram_urlss = [
+  "https://t.me/+43_hofAviBs4YWJl",
+  "https://t.me/+pbS2o7aYwe04N2Nl",
+  "https://t.me/+BRroGwpg2wJiZGZl",
+  "https://t.me/+ItWztH1Rb6MxNDU1",
+  "https://t.me/+3Xrk9OJsuT44YjQ1"
+];
+
+var whatsapp_urlss = [
+  "https://whatsapp.com/channel/0029VbBrULX30LKYjSCtrT10"
+];
+
+function telewhere() {
+  var urls = telegram_urlss[Math.floor(Math.random() * telegram_urlss.length)];
+  window.location = urls;
+}
+
+function whatsappwhere() {
+  var urls = whatsapp_urlss[Math.floor(Math.random() * whatsapp_urlss.length)];
+  window.location = urls;
+}
+
+function combinedwhere() {
+  var combined = telegram_urlss.concat(whatsapp_urlss);
+  var urls = combined[Math.floor(Math.random() * combined.length)];
+  window.location = urls;
+}
+
 function initPlayerSystem() {
   try {
 /* ═══════════════════════════════════════════════════════════════
@@ -827,6 +926,7 @@ function setEngineTry(type, state) {
    CLEANUP
 ═══════════════════════════════════════════════════════════════ */
 function destroyAll() {
+  clearBufferWatchdog();
   if (shakaPlayer) { shakaPlayer.destroy(); shakaPlayer = null; }
   if (hlsInstance)  { hlsInstance.destroy(); hlsInstance = null; }
   video.pause();
@@ -847,8 +947,27 @@ function setStatus(state, msg) {
   sstatus.className = 'stream-status ' + state;
 }
 let autoswitchTimeout = null;
+let bufferWatchdog = null;
+
+function startBufferWatchdog() {
+  clearBufferWatchdog();
+  bufferWatchdog = setTimeout(() => {
+    if (sstatus.classList.contains('buffer') || !ovLoad.classList.contains('hidden')) {
+      console.warn("Buffer timeout reached. Trying next stream...");
+      showError("Stream connection timed out.");
+    }
+  }, 15000);
+}
+
+function clearBufferWatchdog() {
+  if (bufferWatchdog) {
+    clearTimeout(bufferWatchdog);
+    bufferWatchdog = null;
+  }
+}
 
 function showError(msg) {
+  clearBufferWatchdog();
   ovLoad.classList.add('hidden');
   errMsg.textContent = msg || 'Stream could not be loaded.';
   ovErr.classList.remove('hidden');
@@ -1210,15 +1329,22 @@ function updateVolIcon() {
   icoMute.style.display = muted ? 'block' : 'none';
 }
 
-video.addEventListener('play',  () => { icoPlay.style.display='none'; icoPause.style.display='block'; });
-video.addEventListener('pause', () => { icoPlay.style.display='block'; icoPause.style.display='none'; });
-video.addEventListener('waiting', () => { ovLoad.classList.remove('hidden'); ovLoadMsg.textContent = 'Buffering...'; setStatus('buffer', 'Buffering...'); });
-video.addEventListener('canplay', () => { ovLoad.classList.add('hidden'); });
+video.addEventListener('waiting', () => { 
+  ovLoad.classList.remove('hidden'); 
+  ovLoadMsg.textContent = 'Buffering...'; 
+  setStatus('buffer', 'Buffering...'); 
+  startBufferWatchdog();
+});
+video.addEventListener('canplay', () => { 
+  ovLoad.classList.add('hidden'); 
+  clearBufferWatchdog();
+});
 video.addEventListener('playing', () => {
   ovLoad.classList.add('hidden');
   ovErr.classList.add('hidden');
   setStatus('live', 'Stream live');
   unmuteAndPlay();
+  clearBufferWatchdog();
   if (!shakaPlayer && !hlsInstance) {
     setEngineBadge('native');
     setEngineTry('native', 'success');
@@ -1234,6 +1360,7 @@ video.addEventListener('playing', () => {
 });
 video.addEventListener('stalled', () => setStatus('buffer', 'Stream stalled...'));
 video.addEventListener('error',   () => {
+  clearBufferWatchdog();
   if (!shakaPlayer && !hlsInstance) {
     showError('Video error. Try another link.');
   }
@@ -1317,6 +1444,16 @@ const BADGE_LABELS = {
   auto:'AUTO', dash:'DASH', hls:'HLS', mp4:'MP4', iframe:'EMBED'
 };
 
+function getBaseShareUrl() {
+  try {
+    const currentUrl = (window.self !== window.top) ? document.referrer : location.href;
+    if (currentUrl) {
+      return currentUrl.split('?')[0].split('#')[0];
+    }
+  } catch (e) {}
+  return location.href.split('?')[0].split('#')[0];
+}
+
 function buildLinks() {
   linksList.innerHTML = '';
   STREAM_LINKS.forEach((lnk, i) => {
@@ -1339,12 +1476,62 @@ function buildLinks() {
         <span class="link-meta">${lnk.meta}</span>
       </span>
       <span class="link-badges">${badgeHTML}</span>
-      <span class="link-play-icon">
-        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-      </span>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        ${lnk.url ? `
+        <button class="ctrl-btn share-stream-btn" title="Copy Share Link to this stream" style="padding: 6px;">
+          <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: #888;"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/></svg>
+        </button>
+        <button class="ctrl-btn copy-stream-btn" title="Copy Direct Stream URL" style="padding: 6px;">
+          <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: #888;"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0-2-.9-2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+        </button>
+        ` : ''}
+        <span class="link-play-icon">
+          <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        </span>
+      </div>
     `;
 
-    if (lnk.url) row.addEventListener('click', () => switchStream(i));
+    if (lnk.url) {
+      row.addEventListener('click', () => switchStream(i));
+      
+      const shareBtn = row.querySelector('.share-stream-btn');
+      if (shareBtn) {
+        shareBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const base = getBaseShareUrl();
+          const shareUrl = base + '?stream=' + (i + 1);
+          navigator.clipboard.writeText(shareUrl).then(() => {
+            const originalTitle = shareBtn.title;
+            shareBtn.title = "Link Copied!";
+            shareBtn.innerHTML = `<svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: #2ecc71;"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`;
+            setTimeout(() => {
+              shareBtn.title = originalTitle;
+              shareBtn.innerHTML = `<svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: #888;"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/></svg>`;
+            }, 1500);
+          }).catch(err => {
+            console.error('Could not copy text: ', err);
+          });
+        });
+      }
+
+      const copyBtn = row.querySelector('.copy-stream-btn');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          navigator.clipboard.writeText(lnk.url).then(() => {
+            const originalTitle = copyBtn.title;
+            copyBtn.title = "Copied!";
+            copyBtn.innerHTML = `<svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: #2ecc71;"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`;
+            setTimeout(() => {
+              copyBtn.title = originalTitle;
+              copyBtn.innerHTML = `<svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: #888;"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0-2-.9-2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>`;
+            }, 1500);
+          }).catch(err => {
+            console.error('Could not copy text: ', err);
+          });
+        });
+      }
+    }
     linksList.appendChild(row);
   });
 }
@@ -1369,6 +1556,7 @@ function switchStream(idx) {
   engineList.innerHTML = '';
   setStatus('buffer', 'Connecting...');
   initPlayer(lnk.url, lnk.type);
+  startBufferWatchdog();
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1376,14 +1564,36 @@ function switchStream(idx) {
 ═══════════════════════════════════════════════════════════════ */
 buildLinks();
 
-const params     = new URL(location.href).searchParams;
-const paramUrl   = params.get('url');
-const paramType  = params.get('type') || 'auto';
+const params = new URL(location.href).searchParams;
+let parentParams = null;
+try {
+  if (window.self !== window.top) {
+    parentParams = new URL(document.referrer).searchParams;
+  }
+} catch (e) {}
+
+const getParam = (key) => {
+  if (params.has(key)) return params.get(key);
+  if (parentParams && parentParams.has(key)) return parentParams.get(key);
+  return null;
+};
+
+const paramUrl     = getParam('url');
+const paramType    = getParam('type') || 'auto';
+const paramStream  = getParam('stream') || getParam('link') || getParam('s');
 
 if (paramUrl) {
   const matchIdx = STREAM_LINKS.findIndex(l => l.url === paramUrl);
   if (matchIdx !== -1) setActive(matchIdx);
   initPlayer(paramUrl, paramType);
+} else if (paramStream) {
+  const streamIdx = parseInt(paramStream) - 1;
+  if (streamIdx >= 0 && streamIdx < STREAM_LINKS.length && STREAM_LINKS[streamIdx].url) {
+    switchStream(streamIdx);
+  } else {
+    const firstIdx = STREAM_LINKS.findIndex(l => l.url);
+    if (firstIdx !== -1) switchStream(firstIdx);
+  }
 } else {
   const firstIdx = STREAM_LINKS.findIndex(l => l.url);
   if (firstIdx !== -1) {
