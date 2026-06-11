@@ -1,1 +1,35 @@
 [*] Match Scheduler started. Checking every 60 seconds...
+[*] Running auto-discovery for upcoming matches...
+[*] Scanning portal: https://www.rd9sports.pro/
+[+] Appended new source URL to existing match South Korea Vs Czechia: https://www.rd9sports.pro/2026/06/south-korea-vs-czechia.html
+[+] Appended new source URL to existing match South Korea Vs Czechia: https://www.rd9sports.pro/2026/06/south-korea-vs-czechia.html#comment
+[+] Discovered new match: Portugal Vs Nigeria -> https://www.rd9sports.pro/2026/06/portugal-vs-nigeria.html
+[*] Skipping past match: Portugal Vs Nigeria at 2026-06-09T19:45:00Z
+[+] Discovered new match: Portugal Vs Nigeria -> https://www.rd9sports.pro/2026/06/portugal-vs-nigeria.html
+[*] Skipping past match: Portugal Vs Nigeria at 2026-06-09T19:45:00Z
+[+] Discovered new match: Portugal Vs Nigeria -> https://www.rd9sports.pro/2026/06/portugal-vs-nigeria.html
+[*] Skipping past match: Portugal Vs Nigeria at 2026-06-09T19:45:00Z
+[+] Discovered new match: France Vs Ireland -> https://www.rd9sports.pro/2026/06/france-vs-ireland.html
+[*] Skipping past match: France Vs Ireland at 2026-06-07T19:45:00Z
+[+] Discovered new match: France Vs Ireland -> https://www.rd9sports.pro/2026/06/france-vs-ireland.html
+[*] Skipping past match: France Vs Ireland at 2026-06-07T19:45:00Z
+[+] Discovered new match: France Vs Ireland -> https://www.rd9sports.pro/2026/06/france-vs-ireland.html
+[*] Skipping past match: France Vs Ireland at 2026-06-07T19:45:00Z
+[+] Discovered new match: Argentina Vs Honduras -> https://www.rd9sports.pro/2026/06/argentina-vs-honduras.html
+[*] Skipping past match: Argentina Vs Honduras at 2026-06-05T19:45:00Z
+[+] Discovered new match: Argentina Vs Honduras -> https://www.rd9sports.pro/2026/06/argentina-vs-honduras.html#comment
+[*] Skipping past match: Argentina Vs Honduras at 2026-06-05T19:45:00Z
+[+] Discovered new match: Argentina Vs Honduras -> https://www.rd9sports.pro/2026/06/argentina-vs-honduras.html
+[*] Skipping past match: Argentina Vs Honduras at 2026-06-05T19:45:00Z
+[+] Discovered new match: Argentina Vs Honduras -> https://www.rd9sports.pro/2026/06/argentina-vs-honduras.html
+[*] Skipping past match: Argentina Vs Honduras at 2026-06-05T19:45:00Z
+[+] Discovered new match: Portugal Vs Chile -> https://www.rd9sports.pro/2026/06/portugal-vs-chile.html
+[*] Skipping past match: Portugal Vs Chile at 2026-06-05T19:45:00Z
+[+] Discovered new match: Brazil Vs Egypt -> https://www.rd9sports.pro/2026/06/brazil-vs-egypt.html
+[*] Skipping past match: Brazil Vs Egypt at 2026-06-05T19:45:00Z
+[+] Discovered new match: Argentina Vs Honduras -> https://www.rd9sports.pro/2026/06/argentina-vs-honduras.html
+[*] Skipping past match: Argentina Vs Honduras at 2026-06-05T19:45:00Z
+[+] Discovered new match: Real Madrid Vs Barcelona -> https://www.rd9sports.pro/2026/05/real-madrid-vs-barcelona.html
+[*] Skipping past match: Real Madrid Vs Barcelona at 2026-05-09T19:45:00Z
+[*] Scanning portal: https://epicsports.mobi/
+[+] Discovered new match: Peru Vs Spain Match Info -> https://www.epicsports.mobi/2026/06/peru-vs-spain-match-info-preview-lineup.html

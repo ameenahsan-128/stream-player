@@ -7,6 +7,7 @@ import subprocess
 from datetime import datetime, timezone, timedelta
 import requests
 import re
+from urllib.parse import urlparse, urljoin
 
 SCHEDULE_FILE = "match_schedule.json"
 CONFIG_FILE = "blogger_config.json"
@@ -205,7 +206,199 @@ def write_direct_links(match_name, post_url, player_html):
     except Exception as e:
         print(f"[-] Error writing direct links list: {e}")
 
+last_discovery_time = 0
+
+def auto_discover_matches():
+    global last_discovery_time
+    now_ts = time.time()
+    # Run auto-discovery at startup and then every 1 hour (3600 seconds)
+    if last_discovery_time > 0 and (now_ts - last_discovery_time) < 3600:
+        return
+        
+    print("[*] Running auto-discovery for upcoming matches...")
+    last_discovery_time = now_ts
+    
+    schedule = load_json(SCHEDULE_FILE) or []
+    config = load_json(CONFIG_FILE) or {}
+    
+    portals = config.get("auto_discover_portals", [
+        "https://www.rd9sports.pro/",
+        "https://epicsports.mobi/",
+        "http://footm.site/",
+        "http://footem.site/",
+        "https://90live.in/",
+        "https://www.90live.org/"
+    ])
+    
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    discovered_any = False
+    
+    name_to_match = {m["match_name"].lower().strip(): m for m in schedule}
+    existing_urls = set()
+    for m in schedule:
+        urls = m.get("source_url", "")
+        if isinstance(urls, list):
+            for u in urls:
+                existing_urls.add(u.lower().strip())
+        elif isinstance(urls, str):
+            existing_urls.add(urls.lower().strip())
+            
+    for portal in portals:
+        print(f"[*] Scanning portal: {portal}")
+        try:
+            r = requests.get(portal, headers=headers, timeout=12)
+            if r.status_code != 200:
+                continue
+                
+            # Parse links using regex
+            links = re.findall(r'href=[\x27\"]([^\x27\"]+)[\x27\"]', r.text)
+            
+            for url in links:
+                resolved_url = urljoin(portal, url)
+                u_lower = resolved_url.lower()
+                
+                # Exclude static/general pages
+                if any(p in u_lower for p in ["/privacy", "/contact", "/about", "/disclaimer", "/terms", "/search/label", "feed", "blogger.com", "whatsapp.com", "t.me", "telegram"]):
+                    continue
+                    
+                # Is it a match page? (vs/v in path/text)
+                parsed = urlparse(resolved_url)
+                path_segment = parsed.path
+                if path_segment.lower().endswith(".html"):
+                    path_segment = path_segment[:-5]
+                elif path_segment.lower().endswith(".htm"):
+                    path_segment = path_segment[:-4]
+                path_segment = path_segment.replace("-", " ").replace("_", " ")
+                
+                from generate_player import extract_match_name
+                match_name = extract_match_name(path_segment)
+                if not match_name:
+                    continue
+                    
+                match_name = match_name.title()
+                match_name_lower = match_name.lower().strip()
+                resolved_url_lower = resolved_url.lower().strip()
+                
+                if resolved_url_lower in existing_urls:
+                    continue
+                    
+                if match_name_lower in name_to_match:
+                    existing_match = name_to_match[match_name_lower]
+                    if existing_match.get("status") == "completed":
+                        continue
+                        
+                    curr_url = existing_match["source_url"]
+                    if isinstance(curr_url, list):
+                        if resolved_url not in curr_url:
+                            curr_url.append(resolved_url)
+                    else:
+                        if curr_url.lower().strip() != resolved_url_lower:
+                            existing_match["source_url"] = [curr_url, resolved_url]
+                            
+                    existing_urls.add(resolved_url_lower)
+                    discovered_any = True
+                    print(f"[+] Appended new source URL to existing match {match_name}: {resolved_url}")
+                    continue
+                    
+                print(f"[+] Discovered new match: {match_name} -> {resolved_url}")
+                try:
+                    mr = requests.get(resolved_url, headers=headers, timeout=10)
+                    m_html = mr.text if mr.status_code == 200 else ""
+                except Exception:
+                    m_html = ""
+                    
+                # Extract date from page metadata
+                base_date = None
+                time_match = re.search(r'<time[^>]*datetime=[\x27\"]([^\x27\"]+)[\x27\"]', m_html)
+                if time_match:
+                    try:
+                        base_date = datetime.fromisoformat(time_match.group(1))
+                    except Exception:
+                        pass
+                        
+                if not base_date:
+                    base_date = datetime.now(timezone.utc)
+                    
+                # Extract time pattern
+                match_dt = None
+                time_matches = re.findall(r'\b(\d{1,2})[:.](\d{2})\s*(AM|PM|UTC|GMT|IST|ET)?\b', m_html, re.IGNORECASE)
+                for hr_str, min_str, tz in time_matches:
+                    try:
+                        hr = int(hr_str)
+                        mn = int(min_str)
+                        if tz:
+                            tz = tz.upper()
+                            if tz == "PM" and hr < 12:
+                                hr += 12
+                            elif tz == "AM" and hr == 12:
+                                hr = 0
+                                
+                        if not (0 <= hr <= 23) or not (0 <= mn <= 59):
+                            continue
+                            
+                        dt = base_date.replace(hour=hr, minute=mn, second=0, microsecond=0)
+                        if tz in ("UTC", "GMT"):
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        elif tz == "IST":
+                            dt = dt.replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
+                        elif tz == "ET":
+                            dt = dt.replace(tzinfo=timezone(timedelta(hours=-5)))
+                        else:
+                            local_tz = datetime.now().astimezone().tzinfo
+                            dt = dt.replace(tzinfo=local_tz)
+                        match_dt = dt
+                        break
+                    except Exception:
+                        continue
+                    
+                if not match_dt:
+                    # If match page already lists active streams, start immediately
+                    if re.search(r'(?i)\b(link\s*\d+|stream\s*\d+|btn\s*\d+)\b', m_html):
+                        match_dt = datetime.now(timezone.utc) - timedelta(minutes=5)
+                    else:
+                        match_dt = datetime.now(timezone.utc) + timedelta(hours=1)
+                        
+                if match_dt.tzinfo is None:
+                    match_dt = match_dt.replace(tzinfo=timezone.utc)
+                else:
+                    match_dt = match_dt.astimezone(timezone.utc)
+
+                # Skip past matches older than 3 hours ago
+                now_utc = datetime.now(timezone.utc)
+                if match_dt < now_utc - timedelta(hours=3):
+                    print(f"[*] Skipping past match: {match_name} at {match_dt.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+                    continue
+
+                time_iso = match_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                
+                # Append to schedule
+                new_match = {
+                    "match_name": match_name,
+                    "match_time": time_iso,
+                    "source_url": resolved_url,
+                    "blogger_post_id": "",
+                    "status": "pending"
+                }
+                schedule.append(new_match)
+                name_to_match[match_name_lower] = new_match
+                existing_urls.add(resolved_url_lower)
+                discovered_any = True
+                print(f"[+] Successfully scheduled match: {match_name} at {time_iso}")
+                
+        except Exception as e:
+            print(f"[-] Error scanning portal {portal}: {e}")
+            
+    if discovered_any:
+        save_json(SCHEDULE_FILE, schedule)
+        print("[+] Schedule saved after discovery.")
+
 def check_and_run():
+    # Run auto-discovery first
+    try:
+        auto_discover_matches()
+    except Exception as e:
+        print(f"[-] Auto-discovery failed: {e}")
+
     schedule = load_json(SCHEDULE_FILE)
     config = load_json(CONFIG_FILE)
     if not schedule or not config:
@@ -219,75 +412,110 @@ def check_and_run():
     now = datetime.now(timezone.utc)
 
     for match in schedule:
-        if match.get("status") != "pending":
+        status = match.get("status", "pending")
+        if status == "completed":
             continue
 
         match_time = parse_time(match["match_time"])
-        # Run if we are within 15 minutes before the match start, up to 2 hours after it starts
+        # Active match window: 15 minutes before kickoff up to 3 hours after
         run_start = match_time - timedelta(minutes=15)
-        run_end = match_time + timedelta(hours=2)
+        run_end = match_time + timedelta(hours=3)
 
         if run_start <= now <= run_end:
-            print(f"[*] Starting process for match: {match['match_name']}")
-            match["status"] = "processing"
-            save_json(SCHEDULE_FILE, schedule) # Save status immediately
-
-            # Define output file name
-            os.makedirs("players", exist_ok=True)
-            temp_output = os.path.join("players", f"player_{match['match_name'].replace(' ', '_').lower()}.html")
-            
-            # Step 1: Run generate_player.py to crawl and produce player file
-            print(f"[*] Scraping {match['source_url']}...")
-            try:
-                cmd = ["python3", "generate_player.py", "-u", match["source_url"], "-o", temp_output]
-                res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                print(f"[+] Scraping successful. Generated {temp_output}")
-            except Exception as e:
-                print(f"[-] Scraping failed: {e}")
-                match["status"] = "failed"
-                changed = True
-                continue
-
-            # Read player HTML content
-            if os.path.exists(temp_output):
-                with open(temp_output, "r", encoding="utf-8") as pf:
-                    player_html = pf.read()
+            # Check if never run or was run more than 5 minutes ago
+            last_run_str = match.get("last_run_time")
+            should_run = False
+            if not last_run_str:
+                should_run = True
             else:
-                print(f"[-] Output file {temp_output} not found.")
-                match["status"] = "failed"
-                changed = True
-                continue
-
-            # Step 2: Push to Blogger if OAuth is set up
-            if has_oauth:
                 try:
-                    print(f"[*] Fetching access token...")
-                    token = get_access_token(config)
-                    post_title = match["match_name"] + " Live Stream"
-                    
-                    post_id = match.get("blogger_post_id")
-                    if post_id and not post_id.startswith("YOUR_") and post_id.strip():
-                        print(f"[*] Updating existing Blogger post {post_id}...")
-                        post_url = update_blogger_post(config, token, post_id, post_title, player_html)
-                    else:
-                        print(f"[*] Creating a NEW Blogger post...")
-                        post_id, post_url = create_blogger_post(config, token, post_title, player_html)
-                        match["blogger_post_id"] = post_id
-                        print(f"[+] Created new Blogger post with ID: {post_id}")
-                        
-                    print(f"[+] Blogger page updated successfully! URL: {post_url}")
-                    match["blogger_post_url"] = post_url
-                    match["iframe_embed_code"] = f'<iframe src="{post_url}" width="100%" height="480px" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="background:#000;"></iframe>'
-                    match["status"] = "completed"
-                    # Generate the direct links list
-                    write_direct_links(match["match_name"], post_url, player_html)
+                    last_run_dt = parse_time(last_run_str)
+                    if now - last_run_dt >= timedelta(minutes=5):
+                        should_run = True
+                except Exception:
+                    should_run = True
+
+            if should_run:
+                print(f"[*] Starting process/update for active match: {match['match_name']}")
+                match["status"] = "processing"
+                save_json(SCHEDULE_FILE, schedule) # Save status immediately
+                
+                # Define output file name
+                os.makedirs("players", exist_ok=True)
+                temp_output = os.path.join("players", f"player_{match['match_name'].replace(' ', '_').lower()}.html")
+                
+                # Step 1: Run generate_player.py to crawl and produce player file
+                source = match["source_url"]
+                if isinstance(source, list):
+                    with open("urls.txt", "w", encoding="utf-8") as f:
+                        for u in source:
+                            f.write(u + "\n")
+                    src_arg = ["-f", "urls.txt"]
+                    print(f"[*] Scraping multiple source URLs: {source}...")
+                else:
+                    src_arg = ["-u", source]
+                    print(f"[*] Scraping {source}...")
+                try:
+                    cmd = ["python3", "generate_player.py"] + src_arg + ["-o", temp_output]
+                    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    print(f"[+] Scraping successful. Generated {temp_output}")
                 except Exception as e:
-                    print(f"[-] Blogger upload failed: {e}")
-                    match["status"] = "failed"
-            else:
-                print("[!] Blogger OAuth not fully configured. Storing player HTML locally only.")
-                match["status"] = "completed_local"
-            
+                    print(f"[-] Scraping failed: {e}")
+                    # Revert to pending so we retry in the next loop
+                    match["status"] = "pending"
+                    changed = True
+                    continue
+
+                # Read player HTML content
+                if os.path.exists(temp_output):
+                    with open(temp_output, "r", encoding="utf-8") as pf:
+                        player_html = pf.read()
+                else:
+                    print(f"[-] Output file {temp_output} not found.")
+                    match["status"] = "pending"
+                    changed = True
+                    continue
+
+                # Step 2: Push/Update on Blogger if OAuth is set up
+                if has_oauth:
+                    try:
+                        print(f"[*] Fetching access token...")
+                        token = get_access_token(config)
+                        post_title = match["match_name"] + " Live Stream"
+                        
+                        post_id = match.get("blogger_post_id")
+                        if post_id and not post_id.startswith("YOUR_") and post_id.strip():
+                            print(f"[*] Updating existing Blogger post {post_id}...")
+                            post_url = update_blogger_post(config, token, post_id, post_title, player_html)
+                        else:
+                            print(f"[*] Creating a NEW Blogger post...")
+                            post_id, post_url = create_blogger_post(config, token, post_title, player_html)
+                            match["blogger_post_id"] = post_id
+                            print(f"[+] Created new Blogger post with ID: {post_id}")
+                            
+                        print(f"[+] Blogger page updated successfully! URL: {post_url}")
+                        match["blogger_post_url"] = post_url
+                        match["iframe_embed_code"] = f'<iframe src="{post_url}" width="100%" height="480px" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="background:#000;"></iframe>'
+                        # Keep as pending while active so it can update again, but record last run
+                        match["status"] = "pending"
+                        match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                        
+                        # Generate the direct links list
+                        write_direct_links(match["match_name"], post_url, player_html)
+                    except Exception as e:
+                        print(f"[-] Blogger upload failed: {e}")
+                        match["status"] = "pending"
+                else:
+                    print("[!] Blogger OAuth not fully configured. Storing player HTML locally only.")
+                    match["status"] = "pending"
+                    match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                
+                changed = True
+
+        elif now > run_end:
+            # Match has ended, run one final time to finalize links
+            print(f"[*] Match active window ended. Performing final crawl for: {match['match_name']}")
+            match["status"] = "completed"
             changed = True
 
     if changed:

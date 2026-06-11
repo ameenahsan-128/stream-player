@@ -19,7 +19,12 @@
   {
     "match_name": "South Korea vs Czechia",
     "match_time": "2026-06-12T02:00:00Z",
-    "source_url": "https://www.rd9sports.pro/p/fifa-world-cup-live-info.html",
+    "source_url": [
+      "https://www.rd9sports.pro/p/fifa-world-cup-live-info.html",
+      "https://www.rd9sports.pro/2026/06/south-korea-vs-czechia.html",
+      "https://www.rd9sports.pro/2026/06/south-korea-vs-czechia.html#comment",
+      "https://90live.yallatvlive.com/2026/06/south-korea-vs-czechia-live-score.html?m=1"
+    ],
     "blogger_post_id": "3631972399031520883",
     "status": "pending"
   }

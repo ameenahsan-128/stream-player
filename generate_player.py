@@ -493,49 +493,7 @@ input[type=range].vol-slider {
 }
 .ad-bottom { text-align:center; padding: 14px 0; }
 
-.embed-box {
-  margin-top: 14px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 14px;
-}
-.embed-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-  font-family: 'Rajdhani', sans-serif;
-  font-size: 13px;
-  font-weight: 600;
-  color: #888;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-}
-.copy-embed-btn {
-  background: var(--red);
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  padding: 4px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: 'Rajdhani', sans-serif;
-  transition: background 0.2s;
-}
-.copy-embed-btn:hover { background: #b52a35; }
-.embed-input {
-  width: 100%;
-  background: rgba(0,0,0,0.5);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: #ccc;
-  padding: 8px 10px;
-  font-size: 12px;
-  outline: none;
-  font-family: monospace;
-}
+
 
 @media(max-width:600px) {
   .site-header { padding: 10px 14px; }
@@ -672,15 +630,6 @@ input[type=range].vol-slider {
       </div>
     </div>
     <div class="stream-links-list" id="links-list"></div>
-  </div>
-
-  <!-- ══ EMBED PLAYER ── -->
-  <div class="embed-box" id="embed-section">
-    <div class="embed-header">
-      <span>🔗 Embed Code</span>
-      <button class="copy-embed-btn" id="copy-embed-btn">📋 Copy Code</button>
-    </div>
-    <input type="text" class="embed-input" id="embed-input" readonly value="">
   </div>
 
   <!-- Popup Ad -->
@@ -1995,6 +1944,25 @@ def extract_final_stream_details(tree):
         "type": stream_type
     }
 
+def is_stream_url_working(url, stream_type):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.rd9sports.pro/"
+    }
+    # Skip checking if url is clearly not an HTTP link
+    if not url.startswith("http"):
+        return False
+    try:
+        # Check HTTP connectivity using a fast GET request with stream=True
+        r = requests.get(url, headers=headers, timeout=4, stream=True)
+        if r.status_code in (200, 206, 301, 302, 307, 308):
+            return True
+        print(f"[-] Stream URL validation failed for {url} with status {r.status_code}")
+        return False
+    except Exception as e:
+        print(f"[-] Stream URL validation failed for {url} with exception: {e}")
+        return False
+
 def process_root_url(root_url, max_depth=2):
     print(f"\n[*] STEP 1: Scraping page for stream links: {root_url}")
     matched_links = extract_root_links(root_url)
@@ -2336,7 +2304,6 @@ def main():
                 if stream_url in seen_urls:
                     print(f"[-] Skipping duplicate stream URL for: {label_raw} (Stream {s_idx})")
                     continue
-                seen_urls.add(stream_url)
                 
                 # Determine type of this specific stream
                 url_lower = stream_url.lower()
@@ -2353,6 +2320,13 @@ def main():
                 if s_type == "iframe":
                     print(f"[-] Skipping iframe embed stream: {stream_url}")
                     continue
+                    
+                # Check if the stream link is responsive/active
+                if not is_stream_url_working(stream_url, s_type):
+                    print(f"[-] Skipping dead/unresponsive stream URL: {stream_url}")
+                    continue
+
+                seen_urls.add(stream_url)
                     
                 # Clear keys only for DASH
                 s_keys = details["clear_keys"] if s_type == "dash" else {}
@@ -2419,6 +2393,7 @@ def main():
             return 4
 
         resolved_items.sort(key=get_type_priority)
+        resolved_items = resolved_items[:7]
 
         # Label and build the final STREAM_LINKS array
         stream_links_js = []
