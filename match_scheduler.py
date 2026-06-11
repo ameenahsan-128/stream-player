@@ -110,11 +110,12 @@ def write_direct_links(match_name, post_url, player_html):
         lines.append(f" Blogger Page: {post_url}")
         lines.append(f"==================================================\n")
         
-        # 2. HTML format
+        # 2. HTML format (optimized for dark backgrounds)
         html_lines = []
-        html_lines.append(f"<h3>Direct Stream Links for: {match_name.upper()}</h3>")
-        html_lines.append(f"<p>Blogger Page: <a href='{post_url}' target='_blank'>{post_url}</a></p>")
-        html_lines.append("<ul>")
+        html_lines.append(f'<div style="background:#0f1115; border:1px solid #232730; border-radius:10px; padding:20px; font-family:\'Segoe UI\',Roboto,Helvetica,sans-serif; color:#eee; max-width:650px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); margin: 20px auto;">')
+        html_lines.append(f'  <h3 style="margin-top:0; color:#fff; font-size:18px; border-bottom:1px solid #232730; padding-bottom:10px; text-transform:uppercase; letter-spacing:0.5px;">Direct Stream Links: {match_name.upper()}</h3>')
+        html_lines.append(f'  <p style="font-size:13px; color:#aaa; margin-bottom:18px;">Blogger Page: <a href="{post_url}" target="_blank" style="color:#25D366; text-decoration:none; font-weight:600;">{post_url}</a></p>')
+        html_lines.append('  <ul style="list-style:none; padding:0; margin:0;">')
         
         for idx, lnk in enumerate(links_data):
             label = lnk.get("label", f"Link {idx + 1}")
@@ -125,14 +126,25 @@ def write_direct_links(match_name, post_url, player_html):
             lines.append(f"{idx + 1}. {label} ({meta})")
             lines.append(f"   Link: {direct_url}\n")
             
-            # HTML anchor
-            display_meta = f" - {meta}" if meta else ""
-            html_lines.append(f"  <li><a href='{direct_url}' target='_blank'><strong>{label}</strong></a>{display_meta}</li>")
+            # HTML item optimized for dark backgrounds
+            display_meta = meta if meta else "Live Link"
+            html_lines.append(f'    <li style="margin-bottom:10px; padding:12px 16px; background:#161a22; border:1px solid #232730; border-radius:6px; font-size:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">')
+            html_lines.append(f'      <a href="{direct_url}" target="_blank" style="color:#0088cc; text-decoration:none; font-weight:700;">{label}</a>')
+            html_lines.append(f'      <span style="font-size:12px; color:#888;">{display_meta}</span>')
+            html_lines.append(f'    </li>')
             
-        html_lines.append("</ul>")
+        html_lines.append("  </ul>")
+        html_lines.append("</div>")
+        
+        html_content = "\n".join(html_lines)
+        
+        # Append the HTML format into the plain text format so they have it there too
+        lines.append(f"==================================================")
+        lines.append(f" PASTABLE HTML CODE (DARK THEME OPTIMIZED)")
+        lines.append(f"==================================================\n")
+        lines.append(html_content)
         
         content = "\n".join(lines)
-        html_content = "\n".join(html_lines)
         
         # Write plain text formats
         with open("direct_links_list.txt", "w", encoding="utf-8") as f:
