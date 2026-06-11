@@ -1650,11 +1650,62 @@ def analyze_page(url, html, visited):
                     elif ".mpd" in val.lower() and stream_info["type"] == "unknown":
                         stream_info["type"] = "dash"
                         stream_info["player"] = "shaka"
+                        
+    # Detect target channel/stream ID from query parameters to isolate config block
+    id_val = None
+    for q_name in ["id", "ch", "channel", "stream", "link", "s"]:
+        if q_name in q_params:
+            id_val = q_params[q_name][0]
+            break
+            
+    search_html = html
+    if id_val:
+        # Locate the javascript object block containing the channel ID/slug
+        def extract_js_object_containing(source, target_value):
+            pattern = rf"[\x27\"]{re.escape(target_value)}[\x27\"]"
+            match = re.search(pattern, source)
+            if match:
+                pos = match.start()
+            else:
+                pos = source.find(target_value)
+            if pos == -1:
+                return None
+                
+            start_pos = -1
+            brace_count = 0
+            for idx in range(pos, -1, -1):
+                if source[idx] == '}':
+                    brace_count -= 1
+                elif source[idx] == '{':
+                    brace_count += 1
+                    if brace_count == 1:
+                        start_pos = idx
+                        break
+            if start_pos == -1:
+                return None
+                
+            end_pos = -1
+            brace_count = 0
+            for idx in range(start_pos, len(source)):
+                if source[idx] == '{':
+                    brace_count += 1
+                elif source[idx] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_pos = idx + 1
+                        break
+            if end_pos == -1:
+                return None
+            return source[start_pos:end_pos]
+            
+        block = extract_js_object_containing(html, id_val)
+        if block:
+            search_html = block
+            
+    m3u8_links = re.findall(r"[\x27\"](https?://[^\x27\"]+\.m3u8[^\x27\"]*)[\x27\"]", search_html, re.IGNORECASE)
+    mpd_links = re.findall(r"[\x27\"](https?://[^\x27\"]+\.mpd[^\x27\"]*)[\x27\"]", search_html, re.IGNORECASE)
     
-    m3u8_links = re.findall(r"[\x27\"](https?://[^\x27\"]+\.m3u8[^\x27\"]*)[\x27\"]", html, re.IGNORECASE)
-    mpd_links = re.findall(r"[\x27\"](https?://[^\x27\"]+\.mpd[^\x27\"]*)[\x27\"]", html, re.IGNORECASE)
-    
-    keys_match = re.search(r"clearKeys\s*:\s*\{([^}]+)\}", html, re.DOTALL)
+    keys_match = re.search(r"clearKeys\s*:\s*\{([^}]+)\}", search_html, re.DOTALL)
     if keys_match:
         pairs = re.findall(r"[\x27\"]([0-9a-fA-F]{32})[\x27\"]\s*:\s*[\x27\"]([0-9a-fA-F]{32})[\x27\"]", keys_match.group(1))
         if pairs:
@@ -1662,7 +1713,13 @@ def analyze_page(url, html, visited):
             stream_info["player"] = "shaka"
             stream_info["type"] = "dash"
             
-    jw_match = re.search(r"jwplayer\(.*?\)\.setup\(\{(.*?)\}\)", html, re.DOTALL | re.IGNORECASE)
+    ck_match = re.search(r"[\x27\"]?clearkey[\x27\"]?\s*:\s*[\x27\"]([0-9a-fA-F]{32}):([0-9a-fA-F]{32})[\x27\"]", search_html, re.IGNORECASE)
+    if ck_match:
+        stream_info["clear_keys"] = {ck_match.group(1): ck_match.group(2)}
+        stream_info["player"] = "shaka"
+        stream_info["type"] = "dash"
+        
+    jw_match = re.search(r"jwplayer\(.*?\)\.setup\(\{(.*?)\}\)", search_html, re.DOTALL | re.IGNORECASE)
     if jw_match:
         stream_info["player"] = "jwplayer"
         file_match = re.search(r"file\s*:\s*[\x27\"]([^\x27\"]+)[\x27\"]", jw_match.group(1))
