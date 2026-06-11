@@ -147,16 +147,17 @@ def write_direct_links(match_name, post_url, player_html):
         content = "\n".join(lines)
         
         # Write plain text formats
-        with open("direct_links_list.txt", "w", encoding="utf-8") as f:
+        os.makedirs("links", exist_ok=True)
+        with open(os.path.join("links", "direct_links_list.txt"), "w", encoding="utf-8") as f:
             f.write(content)
         safe_name = match_name.replace(' ', '_').lower()
-        with open(f"links_{safe_name}.txt", "w", encoding="utf-8") as f:
+        with open(os.path.join("links", f"links_{safe_name}.txt"), "w", encoding="utf-8") as f:
             f.write(content)
             
         # Write HTML formats
-        with open("direct_links_list.html", "w", encoding="utf-8") as f:
+        with open(os.path.join("links", "direct_links_list.html"), "w", encoding="utf-8") as f:
             f.write(html_content)
-        with open(f"links_{safe_name}.html", "w", encoding="utf-8") as f:
+        with open(os.path.join("links", f"links_{safe_name}.html"), "w", encoding="utf-8") as f:
             f.write(html_content)
             
         print(f"[+] Direct links list successfully written to plain text and HTML list files for {match_name}")
@@ -192,7 +193,8 @@ def check_and_run():
             save_json(SCHEDULE_FILE, schedule) # Save status immediately
 
             # Define output file name
-            temp_output = f"player_{match['match_name'].replace(' ', '_').lower()}.html"
+            os.makedirs("players", exist_ok=True)
+            temp_output = os.path.join("players", f"player_{match['match_name'].replace(' ', '_').lower()}.html")
             
             # Step 1: Run generate_player.py to crawl and produce player file
             print(f"[*] Scraping {match['source_url']}...")
