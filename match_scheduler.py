@@ -6,6 +6,7 @@ import time
 import subprocess
 from datetime import datetime, timezone, timedelta
 import requests
+import re
 
 SCHEDULE_FILE = "match_schedule.json"
 CONFIG_FILE = "blogger_config.json"
@@ -94,6 +95,42 @@ def parse_time(time_str):
         time_str = time_str[:-1] + "+00:00"
     return datetime.fromisoformat(time_str)
 
+def write_direct_links(match_name, post_url, player_html):
+    # Regex to extract the STREAM_LINKS list
+    match_data = re.search(r'const STREAM_LINKS\s*=\s*(\[.*?\]);', player_html, re.DOTALL)
+    if not match_data:
+        return
+    try:
+        links_data = json.loads(match_data.group(1))
+        lines = []
+        lines.append(f"==================================================")
+        lines.append(f" DIRECT STREAM LINKS FOR: {match_name.upper()}")
+        lines.append(f" Blogger Page: {post_url}")
+        lines.append(f"==================================================\n")
+        
+        for idx, lnk in enumerate(links_data):
+            label = lnk.get("label", f"Link {idx + 1}")
+            meta = lnk.get("meta", "")
+            direct_url = f"{post_url}?link={idx + 1}"
+            lines.append(f"{idx + 1}. {label} ({meta})")
+            lines.append(f"   Link: {direct_url}\n")
+            
+        content = "\n".join(lines)
+        
+        # Write to common file (latest)
+        with open("direct_links_list.txt", "w", encoding="utf-8") as f:
+            f.write(content)
+            
+        # Write to match specific file
+        safe_name = match_name.replace(' ', '_').lower()
+        with open(f"links_{safe_name}.txt", "w", encoding="utf-8") as f:
+            f.write(content)
+            
+        print(f"[+] Direct links list successfully written to direct_links_list.txt and links_{safe_name}.txt")
+        print(content)
+    except Exception as e:
+        print(f"[-] Error writing direct links list: {e}")
+
 def check_and_run():
     schedule = load_json(SCHEDULE_FILE)
     config = load_json(CONFIG_FILE)
@@ -167,6 +204,8 @@ def check_and_run():
                     match["blogger_post_url"] = post_url
                     match["iframe_embed_code"] = f'<iframe src="{post_url}" width="100%" height="480px" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="background:#000;"></iframe>'
                     match["status"] = "completed"
+                    # Generate the direct links list
+                    write_direct_links(match["match_name"], post_url, player_html)
                 except Exception as e:
                     print(f"[-] Blogger upload failed: {e}")
                     match["status"] = "failed"
