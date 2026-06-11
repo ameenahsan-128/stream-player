@@ -1450,8 +1450,17 @@ buildLinks();
 const params     = new URL(location.href).searchParams;
 const paramUrl   = params.get('url');
 const paramType  = params.get('type') || 'auto';
+const paramLink  = params.get('link') || params.get('stream') || params.get('s');
 
-if (paramUrl) {
+if (paramLink) {
+  const linkIdx = parseInt(paramLink, 10) - 1;
+  if (linkIdx >= 0 && linkIdx < STREAM_LINKS.length) {
+    switchStream(linkIdx);
+  } else {
+    const firstIdx = STREAM_LINKS.findIndex(l => l.url);
+    if (firstIdx !== -1) switchStream(firstIdx);
+  }
+} else if (paramUrl) {
   const matchIdx = STREAM_LINKS.findIndex(l => l.url === paramUrl);
   if (matchIdx !== -1) setActive(matchIdx);
   initPlayer(paramUrl, paramType);
