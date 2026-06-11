@@ -140,17 +140,9 @@ def write_direct_links(match_name, post_url, player_html):
         
         content = "\n".join(lines)
         
-        # Write plain text formats
+        # Write only the match-name HTML format as requested
         os.makedirs("links", exist_ok=True)
-        with open(os.path.join("links", "direct_links_list.txt"), "w", encoding="utf-8") as f:
-            f.write(content)
         safe_name = match_name.replace(' ', '_').lower()
-        with open(os.path.join("links", f"links_{safe_name}.txt"), "w", encoding="utf-8") as f:
-            f.write(content)
-            
-        # Write HTML formats
-        with open(os.path.join("links", "direct_links_list.html"), "w", encoding="utf-8") as f:
-            f.write(html_content)
         with open(os.path.join("links", f"links_{safe_name}.html"), "w", encoding="utf-8") as f:
             f.write(html_content)
             
