@@ -117,7 +117,7 @@ def write_direct_links(match_name, post_url, player_html):
         html_lines.append(f'  <p style="font-size:13px; color:#aaa; margin-bottom:18px;">Blogger Page: <a href="{post_url}" target="_blank" style="color:#25D366; text-decoration:none; font-weight:600;">{post_url}</a></p>')
         html_lines.append('  <ul style="list-style:none; padding:0; margin:0;">')
         
-        for idx, lnk in enumerate(links_data):
+        for idx, lnk in enumerate(links_data[:7]):
             label = lnk.get("label", f"Link {idx + 1}")
             meta = lnk.get("meta", "")
             direct_url = f"{post_url}?link={idx + 1}"

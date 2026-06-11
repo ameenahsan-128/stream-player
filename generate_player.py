@@ -774,10 +774,15 @@ function sortAndRebuildLinks() {
   const activeId = STREAM_LINKS[activeIndex] ? STREAM_LINKS[activeIndex].id : null;
   
   STREAM_LINKS.sort((a, b) => {
+    // 1. Prioritize active stream to the top so it is always visible
+    const aActive = a.id === activeId;
+    const bActive = b.id === activeId;
+    if (aActive && !bActive) return -1;
+    if (!aActive && bActive) return 1;
+
+    // 2. Put failed ones at the bottom, sorted by failCount ascending
     const aFailed = a.failCount > 0;
     const bFailed = b.failCount > 0;
-    
-    // Put failed ones at the bottom, sorted by failCount ascending
     if (aFailed && !bFailed) return 1;
     if (!aFailed && bFailed) return -1;
     if (aFailed && bFailed) {
@@ -786,7 +791,7 @@ function sortAndRebuildLinks() {
       }
     }
     
-    // Put successful ones at the top
+    // 3. Put successful ones at the top
     if (a.success && !b.success) return -1;
     if (!a.success && b.success) return 1;
     
@@ -1405,7 +1410,7 @@ const BADGE_LABELS = {
 
 function buildLinks() {
   linksList.innerHTML = '';
-  STREAM_LINKS.forEach((lnk, i) => {
+  STREAM_LINKS.slice(0, 7).forEach((lnk, i) => {
     const row = document.createElement('div');
     row.className = 'stream-link-item' + (!lnk.url ? ' disabled' : '');
     row.dataset.index = i;
