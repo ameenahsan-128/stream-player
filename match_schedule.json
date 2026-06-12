@@ -26,6 +26,27 @@
       "https://90live.yallatvlive.com/2026/06/south-korea-vs-czechia-live-score.html?m=1"
     ],
     "blogger_post_id": "3631972399031520883",
+    "status": "completed"
+  },
+  {
+    "match_name": "Canada vs Bosnia and Herzegovina",
+    "match_time": "2026-06-12T19:00:00Z",
+    "source_url": [
+      "https://www.rd9sports.pro/2026/06/canada-vs-bosnia.html",
+      "https://worldcup.epicsports.mobi/2026/06/canad-bosniahrg.html"
+    ],
+    "blogger_post_id": "3631972399031520883",
+    "status": "pending"
+  },
+  {
+    "match_name": "USA vs Paraguay",
+    "match_time": "2026-06-13T01:00:00Z",
+    "source_url": [
+      "https://www.rd9sports.pro/2026/06/usa-vs-paraguay.html",
+      "https://worldcup.epicsports.mobi/2026/06/usa-paraguay.html",
+      "https://90live.yallatvlive.com/2026/06/usa-vs-paraguay-live-score-preview.html"
+    ],
+    "blogger_post_id": "3631972399031520883",
     "status": "pending"
   }
 ]

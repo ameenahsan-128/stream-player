@@ -223,6 +223,7 @@ def auto_discover_matches():
     
     portals = config.get("auto_discover_portals", [
         "https://www.rd9sports.pro/",
+        "https://worldcup.epicsports.mobi/",
         "https://epicsports.mobi/",
         "http://footm.site/",
         "http://footem.site/",
@@ -417,8 +418,8 @@ def check_and_run():
             continue
 
         match_time = parse_time(match["match_time"])
-        # Active match window: 15 minutes before kickoff up to 3 hours after
-        run_start = match_time - timedelta(minutes=15)
+        # Active match window: 10 minutes before kickoff up to 3 hours after
+        run_start = match_time - timedelta(minutes=10)
         run_end = match_time + timedelta(hours=3)
 
         if run_start <= now <= run_end:
