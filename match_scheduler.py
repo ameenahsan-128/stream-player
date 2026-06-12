@@ -523,13 +523,22 @@ def check_and_run():
         save_json(SCHEDULE_FILE, schedule)
 
 def main():
-    print("[*] Match Scheduler started. Checking every 60 seconds...")
-    while True:
-        try:
-            check_and_run()
-        except Exception as e:
-            print(f"[-] Scheduler iteration failed: {e}")
-        time.sleep(60)
+    import argparse
+    parser = argparse.ArgumentParser(description="Match Scheduler and Automator")
+    parser.add_argument("--once", action="store_true", help="Run once and exit (for cronjobs)")
+    args = parser.parse_args()
+
+    if args.once:
+        print("[*] Running scheduler in one-off mode...")
+        check_and_run()
+    else:
+        print("[*] Match Scheduler started. Checking every 60 seconds...")
+        while True:
+            try:
+                check_and_run()
+            except Exception as e:
+                print(f"[-] Scheduler iteration failed: {e}")
+            time.sleep(60)
 
 if __name__ == "__main__":
     main()
