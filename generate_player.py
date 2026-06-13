@@ -2702,9 +2702,12 @@ def probe_dash_init_segment(manifest_url, manifest_bytes, headers):
     init_url = urljoin(manifest_url, urljoin(base_url, init_path))
     response = requests.get(init_url, headers=headers, timeout=6, stream=True, allow_redirects=True)
     status_code = response.status_code
+    cors_ok = response_cors_ok(response)
     response.close()
     if status_code not in (200, 206):
         return False, f"dash-init-http-{status_code}", status_code
+    if not cors_ok:
+        return False, "dash-init-cors-blocked", status_code
     return True, "dash-init-ok", status_code
 
 
@@ -2734,6 +2737,7 @@ def probe_stream_url(url, stream_type, clear_keys=None):
         result["error"] = "non-http-url"
         result["validation_reason"] = "non-http-url"
         return result
+    r = None
     try:
         started = time.monotonic()
         r = requests.get(url, headers=headers, timeout=6, stream=True, allow_redirects=True)
@@ -2753,13 +2757,45 @@ def probe_stream_url(url, stream_type, clear_keys=None):
             result["error"] = "hls-manifest-cors-blocked"
             result["validation_reason"] = result["error"]
             return result
+        if stream_type == "dash" and not result["cors_ok"]:
+            result["error"] = "dash-manifest-cors-blocked"
+            result["validation_reason"] = result["error"]
+            return result
 
         manifest_text = ""
         manifest_bytes = b""
         if stream_type in ("hls", "dash"):
             manifest_bytes = b"".join(r.iter_content(chunk_size=8192))
             manifest_text = manifest_bytes[:200000].decode("utf-8", errors="ignore")
-        r.close()
+        elif stream_type == "iframe":
+            iframe_html = read_stream_text(r, max_bytes=100000)
+            iframe_lower = iframe_html.lower()
+            offline_patterns = [
+                "stream offline",
+                "stream is offline",
+                "currently offline",
+                "channel offline",
+                "stream not found",
+                "no stream",
+                "error loading stream",
+                "loading failed",
+                "stream ended",
+                "match ended",
+                "invalid stream",
+                "access denied",
+                "geo block",
+                "not allowed in your country",
+                "not available in your region",
+            ]
+            for pat in offline_patterns:
+                if pat in iframe_lower:
+                    result["error"] = f"iframe-offline-content:{pat.replace(' ', '-')}"
+                    result["validation_reason"] = result["error"]
+                    return result
+            if len(iframe_html.strip()) < 150 and "iframe" not in iframe_lower and "embed" not in iframe_lower and "video" not in iframe_lower:
+                result["error"] = "iframe-content-too-short"
+                result["validation_reason"] = result["error"]
+                return result
 
         if stream_type == "hls":
             if not manifest_text.lstrip().startswith("#EXTM3U"):
@@ -2812,6 +2848,9 @@ def probe_stream_url(url, stream_type, clear_keys=None):
         result["validation_reason"] = str(e)
         print(f"[-] Stream URL validation failed for {url} with exception: {e}")
         return result
+    finally:
+        if r is not None:
+            r.close()
 
 
 def is_stream_url_working(url, stream_type):

@@ -127,7 +127,7 @@
     "active_window_start_minutes": 15,
     "active_window_end_hours": 3,
     "pre_kickoff_cooldown_minutes": 1,
-    "post_kickoff_cooldown_minutes": 5,
+    "post_kickoff_cooldown_minutes": 3,
     "loop_interval_seconds": 60,
     "auto_discover_interval_seconds": 1800,
     "source_refresh_interval_seconds": 1800,
@@ -225,6 +225,6 @@
       "es.footem.in"
     ],
     "post_kickoff_fast_window_minutes": 20,
-    "post_kickoff_fast_cooldown_minutes": 5
+    "post_kickoff_fast_cooldown_minutes": 2
   }
 }

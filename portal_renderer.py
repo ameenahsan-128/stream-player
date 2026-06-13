@@ -981,7 +981,7 @@ def render_streaming_page(config, match, state="upcoming", links_html=""):
   {portal_row(render_channel_country_table(ctx, match, config), padding="0")}
   {portal_row(render_square_ad(config), padding="12px")}
   {portal_header_row("Streaming Links", bg="#000000")}
-  {portal_row(link_notice + stream_block if state == "live" and links_html else stream_block, padding="12px")}
+  {portal_row(stream_block, padding="12px")}
   {render_page_lineup_section(ctx, match)}
   {portal_row(render_smartlink_button(config), padding="12px")}
 """
