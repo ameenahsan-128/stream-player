@@ -24,15 +24,23 @@ DEFAULT_DISCOVERY_PORTALS = [
     "https://www.epicsports.in/",
     "https://www.epicsports.in/?view=tomo",
     "https://www.epicsports.blog/",
-    "https://www.footem.site/",
-    "https://90live.in/",
+    "https://www.footem.co.in/",
+    "https://www.90live.in/",
+    "https://90live.yallatvlive.com/",
+    "https://notebookpot.com/",
+    "https://sportstrack.me/",
+    "https://soccervent.xyz/",
+    "https://vivo.epicsportss.com/",
+    "https://fifawcbycxf.pages.dev/",
+    "https://cxfoot.pages.dev/",
+    "https://football.scoopnonstop.com/",
+    "https://sportscorner3697.blogspot.com/",
+    "https://loosports.xtva.shop/",
+    "https://rexdexsports.in/",
     "https://www.rd9sports.pro/",
     "https://worldcup.epicsports.mobi/",
     "https://worldcup.epicsports.co.in/",
     "https://epicsports.mobi/",
-    "http://footm.site/",
-    "http://footem.site/",
-    "https://www.90live.org/"
 ]
 
 DEFAULT_TRUSTED_SOURCE_DOMAINS = [
@@ -52,8 +60,22 @@ DEFAULT_TRUSTED_SOURCE_DOMAINS = [
     "90live.in",
     "www.90live.in",
     "90live.yallatvlive.com",
-    "www.footem.site",
-    "footem.site",
+    "notebookpot.com",
+    "sportstrack.me",
+    "sportstrack.yallatvlive.com",
+    "soccervent.xyz",
+    "vivo.epicsportss.com",
+    "fifawcbycxf.pages.dev",
+    "cxfoot.pages.dev",
+    "football.scoopnonstop.com",
+    "sportscorner3697.blogspot.com",
+    "loosports.xtva.shop",
+    "ok.ru",
+    "www.ok.ru",
+    "rexdexsports.in",
+    "www.rexdexsports.in",
+    "www.footem.co.in",
+    "footem.co.in",
     "es.footem.in"
 ]
 
@@ -70,6 +92,8 @@ DEFAULT_SCHEDULER_CONFIG = {
     "active_window_start_minutes": 15,
     "active_window_end_hours": 3,
     "pre_kickoff_cooldown_minutes": 1,
+    "post_kickoff_fast_window_minutes": 20,
+    "post_kickoff_fast_cooldown_minutes": 5,
     "post_kickoff_cooldown_minutes": 10,
     "loop_interval_seconds": 60,
     "auto_discover_interval_seconds": 1800,
@@ -89,7 +113,7 @@ DEFAULT_SCHEDULER_CONFIG = {
         "rd9sports.pro",
         "rd9.riddlearena.com"
     ],
-    "max_sources_per_match": 8,
+    "max_sources_per_match": 12,
     "auto_discover_portals": DEFAULT_DISCOVERY_PORTALS,
     "discovery_portals": DEFAULT_DISCOVERY_PORTALS,
     "trusted_source_domains": DEFAULT_TRUSTED_SOURCE_DOMAINS
@@ -123,15 +147,15 @@ DEFAULT_SHARED_SMARTLINK_CONFIG = {
 }
 
 DEFAULT_PORTAL_ADS = {
-    "top_300x250": "<script>atOptions = {'key':'26752c18ca8361bba098d31342583042','format':'iframe','height':250,'width':300,'params':{}};</script><script src=\"https://throughalivemedication.com/26752c18ca8361bba098d31342583042/invoke.js\"></script>",
-    "popup_300x250": "<script>atOptions = {'key':'26752c18ca8361bba098d31342583042','format':'iframe','height':250,'width':300,'params':{}};</script><script src=\"https://throughalivemedication.com/26752c18ca8361bba098d31342583042/invoke.js\"></script>",
-    "popunder": '<script src="https://throughalivemedication.com/45/96/a9/4596a9a27ac7c137dd494fd1f200edbb.js"></script>',
-    "social_bar": '<script src="https://throughalivemedication.com/66/f1/17/66f11775fe2744312299821ac71b38f1.js"></script>'
+    "top_300x250": "<script>atOptions = {'key':'26752c18ca8361bba098d31342583042','format':'iframe','height':250,'width':300,'params':{}};</script><script async src=\"https://throughalivemedication.com/26752c18ca8361bba098d31342583042/invoke.js\"></script>",
+    "popup_300x250": "<script>atOptions = {'key':'26752c18ca8361bba098d31342583042','format':'iframe','height':250,'width':300,'params':{}};</script><script async src=\"https://throughalivemedication.com/26752c18ca8361bba098d31342583042/invoke.js\"></script>",
+    "popunder": '<script async src="https://throughalivemedication.com/45/96/a9/4596a9a27ac7c137dd494fd1f200edbb.js"></script>',
+    "social_bar": '<script async src="https://throughalivemedication.com/66/f1/17/66f11775fe2744312299821ac71b38f1.js"></script>'
 }
 
 DEFAULT_PLAYER_ADS = {
-    "head_script": '<script src="https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js"></script>',
-    "bottom_script": '<script src="https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js"></script>'
+    "head_script": '<script async src="https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js"></script>',
+    "bottom_script": '<script async src="https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js"></script>'
 }
 
 

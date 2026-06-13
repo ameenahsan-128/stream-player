@@ -122,12 +122,53 @@ def get_access_token(config):
     response.raise_for_status()
     return response.json().get("access_token")
 
-def update_blogger_post(config, access_token, post_id, title, html_content):
+def html_has_image(html_content):
+    return bool(re.search(r"<img\b", html_content or "", flags=re.IGNORECASE))
+
+
+def extract_first_image_html(html_content):
+    match = re.search(r"<img\b[^>]*>", html_content or "", flags=re.IGNORECASE)
+    return match.group(0) if match else ""
+
+
+def preserve_existing_post_thumbnail(config, access_token, post_id, html_content):
+    if html_has_image(html_content):
+        return html_content
+
+    blog_id = config.get("blog_id")
+    url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        response = requests.get(url, headers=headers, params={"fields": "content"}, timeout=20)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"[!] Existing preview thumbnail lookup failed; continuing without preserve: {e}")
+        return html_content
+
+    image_html = extract_first_image_html((response.json() or {}).get("content", ""))
+    if not image_html:
+        return html_content
+
+    preserved = (
+        '<div style="text-align:center; margin:12px auto 10px; max-width:760px;">'
+        f'{image_html}'
+        '</div>'
+    )
+    marker = '<a name="more"></a>'
+    if marker in html_content:
+        return html_content.replace(marker, f"{preserved}\n{marker}", 1)
+    return f"{preserved}\n{html_content}"
+
+
+def update_blogger_post(config, access_token, post_id, title, html_content, preserve_existing_thumbnail=False):
     blog_id = config.get("blog_id")
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
     }
+
+    if preserve_existing_thumbnail:
+        html_content = preserve_existing_post_thumbnail(config, access_token, post_id, html_content)
     
     # Try as a Post first
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
@@ -370,6 +411,17 @@ def active_window(match, scheduler_config):
     return match_time - timedelta(minutes=start_offset), match_time + timedelta(hours=end_hours), match_time
 
 
+def scrape_cooldown_minutes(now, match_time, scheduler_config):
+    if now < match_time:
+        return int(scheduler_config.get("pre_kickoff_cooldown_minutes", 1))
+
+    fast_window = int(scheduler_config.get("post_kickoff_fast_window_minutes", 20))
+    if fast_window > 0 and now <= match_time + timedelta(minutes=fast_window):
+        return int(scheduler_config.get("post_kickoff_fast_cooldown_minutes", 5))
+
+    return int(scheduler_config.get("post_kickoff_cooldown_minutes", 10))
+
+
 def occupied_player_slots(schedule, current_match, now, scheduler_config):
     occupied = set()
     for other in schedule:
@@ -443,6 +495,7 @@ MATCH_ALIASES = {
     "scot": "scotland",
     "scotlnd": "scotland",
     "sco": "scotland",
+    "tur": "turkiye",
     "turk": "turkiye",
     "turkey": "turkiye",
     "aus": "australia",
@@ -470,7 +523,8 @@ MATCH_STOP_WORDS = {
 STATIC_LINK_PARTS = [
     "/privacy", "/contact", "/about", "/disclaimer", "/terms", "/dmca", "/search/label",
     "feed", "blogger.com", "whatsapp.com", "t.me", "telegram", "facebook.com",
-    "twitter.com", "instagram.com", "pinterest.com", "linkedin.com", "#comment"
+    "twitter.com", "instagram.com", "pinterest.com", "linkedin.com", "#comment",
+    "your_match_link_url"
 ]
 
 
@@ -853,13 +907,7 @@ def check_and_run():
         run_start, run_end, _ = active_window(match, scheduler_config)
 
         if run_start <= now <= run_end:
-            # Check if never run or needs recheck based on kickoff status:
-            # 1 minute interval before kickoff, 10 minutes interval after kickoff
-            cooldown_min = int(
-                scheduler_config.get("pre_kickoff_cooldown_minutes", 1)
-                if now < match_time
-                else scheduler_config.get("post_kickoff_cooldown_minutes", 10)
-            )
+            cooldown_min = scrape_cooldown_minutes(now, match_time, scheduler_config)
             
             last_run_str = match.get("last_run_time")
             should_run = False
@@ -893,6 +941,7 @@ def check_and_run():
                                     post_id,
                                     preview_post_title(render_match, new_config),
                                     post_html,
+                                    preserve_existing_thumbnail=True,
                                 )
                                 match["new_blogger_post_url"] = post_url
                                 print(f"[+] Preview post refreshed with lineup update: {post_url}")

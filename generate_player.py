@@ -5,9 +5,11 @@ import sys
 import json
 import argparse
 import time
+import base64
 import requests
+import xml.etree.ElementTree as ET
 from datetime import datetime
-from urllib.parse import urljoin, urlparse, parse_qs
+from urllib.parse import unquote, urljoin, urlparse, parse_qs
 from html.parser import HTMLParser
 from html import escape as html_escape
 
@@ -96,6 +98,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
 <title>Live Player</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="preconnect" href="https://throughalivemedication.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
 
 <!-- Shaka Player (DASH + HLS native) -->
@@ -584,7 +590,7 @@ input[type=range].vol-slider {
 </header>
 
 <div class="alert-bar">
-  <strong>🛑 ALERT</strong> — Wait <strong>20 seconds</strong> for the stream to load.
+  <strong>🛑 ALERT</strong> — If a stream does not start, the next link is tried automatically.
   Join our <a href="#" onclick="goSomewhere(); return false;">WhatsApp Group</a> for daily live links 👇
 </div>
 
@@ -659,11 +665,11 @@ input[type=range].vol-slider {
         <span class="time-label" id="time-lbl">● LIVE</span>
 
         <div class="vol-wrap">
-          <button class="ctrl-btn" id="btn-mute" title="Mute">
-            <svg id="ico-vol"  viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
-            <svg id="ico-mute" viewBox="0 0 24 24" style="display:none"><path d="M16.5 12A4.5 4.5 0 0014 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+          <button class="ctrl-btn" id="btn-mute" title="Unmute">
+            <svg id="ico-vol"  viewBox="0 0 24 24" style="display:none"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+            <svg id="ico-mute" viewBox="0 0 24 24"><path d="M16.5 12A4.5 4.5 0 0014 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
           </button>
-          <input type="range" class="vol-slider" id="vol-slider" min="0" max="1" step="0.05" value="1">
+          <input type="range" class="vol-slider" id="vol-slider" min="0" max="1" step="0.05" value="0">
         </div>
 
         <select class="quality-select" id="quality-sel" title="Quality">
@@ -682,7 +688,7 @@ input[type=range].vol-slider {
         <div class="sdot"></div>
         <span id="stext">Initializing player...</span>
       </div>
-      <div class="notice">⏳ Wait 20 sec for stream to load properly</div>
+      <div class="notice">The player automatically skips links that do not start.</div>
     </div>
   </div><!-- /player-card -->
 
@@ -825,6 +831,8 @@ STREAM_LINKS.forEach((lnk, i) => {
 
 function sortAndRebuildLinks() {
   const activeId = STREAM_LINKS[activeIndex] ? STREAM_LINKS[activeIndex].id : null;
+  const typePriority = { dash: 0, hls: 1, native: 2, iframe: 3 };
+  const priorityOf = (lnk) => typePriority[lnk.type] ?? 4;
   
   STREAM_LINKS.sort((a, b) => {
     // 1. Prioritize active stream to the top so it is always visible
@@ -843,8 +851,12 @@ function sortAndRebuildLinks() {
         return a.failCount - b.failCount;
       }
     }
+
+    // 3. Keep working candidates in playback priority order.
+    const typeDelta = priorityOf(a) - priorityOf(b);
+    if (typeDelta !== 0) return typeDelta;
     
-    // 3. Put successful ones at the top
+    // 4. Put successful ones at the top within the same stream type
     if (a.success && !b.success) return -1;
     if (!a.success && b.success) return 1;
     
@@ -935,6 +947,22 @@ const engineList  = document.getElementById('engine-list');
 let shakaPlayer  = null;
 let hlsInstance  = null;
 let activeIndex  = -1;
+let playbackAttemptId = 0;
+let playbackStarted = false;
+let startupWatchdog = null;
+let stallWatchdog = null;
+let hlsManifestWatchdog = null;
+let lastProgressTime = 0;
+let lastProgressPosition = 0;
+let preferredFailoverType = null;
+let lastHlsFailure = null;
+const STARTUP_TIMEOUT_MS = 8000;
+const STALL_TIMEOUT_MS = 6000;
+const HLS_MANIFEST_TIMEOUT_MS = 12000;
+const HLS_PLAYBACK_TIMEOUT_MS = 30000;
+const HLS_STALL_TIMEOUT_MS = 15000;
+const HLS_MAX_NETWORK_RECOVERIES = 2;
+const HLS_MAX_MEDIA_RECOVERIES = 2;
 
 /* ═══════════════════════════════════════════════════════════════
    ENGINE BADGE UI
@@ -967,10 +995,114 @@ function setEngineTry(type, state) {
   if (el) el.className = 'engine-try ' + state;
 }
 
+const PLAYBACK_TYPE_PRIORITY = { dash: 0, hls: 1, native: 2, iframe: 3 };
+const priorityOf = (lnk) => PLAYBACK_TYPE_PRIORITY[lnk.type] ?? 4;
+
+function typeLabel(type) {
+  return (type || 'stream').toUpperCase();
+}
+
+function findNextLinkIndex(preferredType) {
+  const candidates = STREAM_LINKS
+    .map((lnk, i) => ({ lnk, i }))
+    .filter(({ lnk, i }) => i !== activeIndex && lnk.url);
+
+  if (!candidates.length) return -1;
+
+  if (preferredType) {
+    const sameTypeUntried = candidates.find(({ lnk }) => lnk.type === preferredType && lnk.failCount === 0);
+    if (sameTypeUntried) return sameTypeUntried.i;
+  }
+
+  const nextUntried = candidates.find(({ lnk }) => lnk.failCount === 0);
+  if (nextUntried) return nextUntried.i;
+
+  let best = candidates[0];
+  candidates.forEach((candidate) => {
+    if (candidate.lnk.failCount < best.lnk.failCount) best = candidate;
+    else if (candidate.lnk.failCount === best.lnk.failCount && priorityOf(candidate.lnk) < priorityOf(best.lnk)) best = candidate;
+  });
+  return best.i;
+}
+
+function autoswitchMessage(failedType, nextType) {
+  if (preferredFailoverType && nextType === preferredFailoverType) {
+    return `${typeLabel(failedType)} failed. Trying next ${typeLabel(nextType)} link...`;
+  }
+  if (preferredFailoverType && failedType === preferredFailoverType && nextType !== preferredFailoverType) {
+    return `All ${typeLabel(preferredFailoverType)} links failed. Falling back to ${typeLabel(nextType)}...`;
+  }
+  return 'Stream error. Autoswitching to next link...';
+}
+
+function clearPlaybackTimers() {
+  clearTimeout(startupWatchdog);
+  clearTimeout(stallWatchdog);
+  clearTimeout(hlsManifestWatchdog);
+  startupWatchdog = null;
+  stallWatchdog = null;
+  hlsManifestWatchdog = null;
+}
+
+function resetPlaybackHealth() {
+  clearPlaybackTimers();
+  playbackStarted = false;
+  lastProgressTime = Date.now();
+  lastProgressPosition = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+}
+
+function markCurrentLinkSuccess() {
+  const activeLnk = STREAM_LINKS[activeIndex];
+  if (activeLnk && (!activeLnk.success || activeLnk.failCount !== 0)) {
+    activeLnk.success = true;
+    activeLnk.failCount = 0;
+    sortAndRebuildLinks();
+  }
+}
+
+function markPlaybackHealthy() {
+  playbackStarted = true;
+  lastProgressTime = Date.now();
+  lastProgressPosition = Number.isFinite(video.currentTime) ? video.currentTime : lastProgressPosition;
+  clearPlaybackTimers();
+  markCurrentLinkSuccess();
+}
+
+function failCurrentLink(reason) {
+  showError(reason || 'Stream failed. Trying next link.');
+}
+
+function startStartupWatchdog(attemptId, timeoutMs = STARTUP_TIMEOUT_MS, message = 'No playback detected. Trying next link...') {
+  clearTimeout(startupWatchdog);
+  startupWatchdog = setTimeout(() => {
+    if (attemptId !== playbackAttemptId || playbackStarted || vwrap.classList.contains('iframe-mode')) return;
+    failCurrentLink(message);
+  }, timeoutMs);
+}
+
+function activeStallTimeout() {
+  const activeLnk = STREAM_LINKS[activeIndex];
+  return activeLnk && activeLnk.type === 'hls' ? HLS_STALL_TIMEOUT_MS : STALL_TIMEOUT_MS;
+}
+
+function startStallWatchdog(attemptId, message, timeoutMs) {
+  if (!playbackStarted || vwrap.classList.contains('iframe-mode')) return;
+  const waitMs = timeoutMs || activeStallTimeout();
+  clearTimeout(stallWatchdog);
+  stallWatchdog = setTimeout(() => {
+    if (attemptId !== playbackAttemptId || !playbackStarted || vwrap.classList.contains('iframe-mode')) return;
+    if (Date.now() - lastProgressTime >= waitMs) {
+      failCurrentLink(message || 'Playback stalled. Trying next link...');
+    }
+  }, waitMs);
+}
+
 /* ═══════════════════════════════════════════════════════════════
    CLEANUP
 ═══════════════════════════════════════════════════════════════ */
 function destroyAll() {
+  clearPlaybackTimers();
+  clearTimeout(autoswitchTimeout);
   if (shakaPlayer) { shakaPlayer.destroy(); shakaPlayer = null; }
   if (hlsInstance)  { hlsInstance.destroy(); hlsInstance = null; }
   video.pause();
@@ -992,38 +1124,42 @@ function setStatus(state, msg) {
 }
 let autoswitchTimeout = null;
 
+function hlsFailureText() {
+  if (!lastHlsFailure) return 'HLS playback failed in this browser.';
+  const parts = [];
+  if (lastHlsFailure.type) parts.push(lastHlsFailure.type);
+  if (lastHlsFailure.details) parts.push(lastHlsFailure.details);
+  const reason = parts.join(' / ') || 'unknown HLS error';
+  return `HLS failed: ${reason}`;
+}
+
+function stopAfterManualHlsFailure(msg) {
+  ovLoad.classList.add('hidden');
+  errMsg.textContent = `${msg || hlsFailureText()} Use DASH/Embed if you want fallback playback.`;
+  ovErr.classList.remove('hidden');
+  retryBtn.textContent = '▶ Use DASH / Embed';
+  retryBtn.dataset.action = 'fallback';
+  setStatus('error', 'HLS failed');
+  setEngineBadge('hls');
+}
+
 function showError(msg) {
+  clearPlaybackTimers();
   ovLoad.classList.add('hidden');
   errMsg.textContent = msg || 'Stream could not be loaded.';
   ovErr.classList.remove('hidden');
+  const activeLnk = STREAM_LINKS[activeIndex];
+  const failedType = activeLnk ? activeLnk.type : null;
   
   // Find next link before sorting
-  let nextIdx = -1;
+  const nextIdx = findNextLinkIndex(preferredFailoverType);
   let nextId = null;
-  
-  let nextUntried = STREAM_LINKS.findIndex((l, i) => i !== activeIndex && l.failCount === 0 && l.url);
-  if (nextUntried !== -1) {
-    nextIdx = nextUntried;
-  } else {
-    let minFail = Infinity;
-    let bestIdx = -1;
-    STREAM_LINKS.forEach((l, i) => {
-      if (i !== activeIndex && l.url) {
-        if (l.failCount < minFail) {
-          minFail = l.failCount;
-          bestIdx = i;
-        }
-      }
-    });
-    nextIdx = bestIdx;
-  }
-  
+
   if (nextIdx !== -1) {
     nextId = STREAM_LINKS[nextIdx].id;
   }
 
   // Update failure score
-  const activeLnk = STREAM_LINKS[activeIndex];
   if (activeLnk) {
     activeLnk.failCount++;
     activeLnk.success = false;
@@ -1036,17 +1172,23 @@ function showError(msg) {
     finalNextIdx = STREAM_LINKS.findIndex(l => l.id === nextId);
   }
 
+  if (preferredFailoverType === 'hls' && failedType === 'hls' && (finalNextIdx === -1 || STREAM_LINKS[finalNextIdx].type !== 'hls')) {
+    stopAfterManualHlsFailure(msg || hlsFailureText());
+    return;
+  }
+
   retryBtn.textContent = finalNextIdx !== -1 ? '▶ Try Next Link' : '🔄 Refresh';
+  retryBtn.dataset.action = 'retry';
   setStatus('error', 'Stream error');
   setEngineBadge('none');
   
   if (finalNextIdx !== -1) {
     clearTimeout(autoswitchTimeout);
-    ovLoadMsg.textContent = 'Stream error. Autoswitching to next link...';
+    ovLoadMsg.textContent = autoswitchMessage(failedType, STREAM_LINKS[finalNextIdx].type);
     ovLoad.classList.remove('hidden');
     ovErr.classList.add('hidden');
     autoswitchTimeout = setTimeout(() => {
-      switchStream(finalNextIdx);
+      switchStream(finalNextIdx, { preserveFailover: true });
     }, 1000);
   }
 }
@@ -1070,12 +1212,8 @@ function loadIframe(url) {
     setStatus('live', 'Embed loaded');
     
     // Mark success
-    const activeLnk = STREAM_LINKS[activeIndex];
-    if (activeLnk) {
-      activeLnk.success = true;
-      activeLnk.failCount = 0;
-      sortAndRebuildLinks();
-    }
+    clearPlaybackTimers();
+    markCurrentLinkSuccess();
   };
   iframeEl.onerror = () => {
     showError('Could not load the embed. Try another link.');
@@ -1088,12 +1226,8 @@ function loadIframe(url) {
       setStatus('live', 'Embed loaded');
       setEngineTry('iframe', 'success');
       
-      const activeLnk = STREAM_LINKS[activeIndex];
-      if (activeLnk) {
-        activeLnk.success = true;
-        activeLnk.failCount = 0;
-        sortAndRebuildLinks();
-      }
+      clearPlaybackTimers();
+      markCurrentLinkSuccess();
     }
   }, 4000);
 }
@@ -1116,6 +1250,31 @@ function loadNative(url) {
 function loadHLS(url, onSuccess, onFail) {
   setEngineTry('hls', 'trying');
   ovLoadMsg.textContent = 'Connecting HLS stream...';
+  const attemptId = playbackAttemptId;
+  let manifestParsed = false;
+  let networkRecoveries = 0;
+  let mediaRecoveries = 0;
+
+  function recordHlsFailure(data, note) {
+    lastHlsFailure = {
+      url,
+      type: data && data.type ? data.type : '',
+      details: data && data.details ? data.details : note || '',
+      fatal: !!(data && data.fatal),
+      networkRecoveries,
+      mediaRecoveries,
+    };
+  }
+
+  function failHls(reason, data) {
+    recordHlsFailure(data, reason);
+    clearTimeout(hlsManifestWatchdog);
+    hlsManifestWatchdog = null;
+    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+    setEngineTry('hls', 'failed');
+    if (onFail) onFail(hlsFailureText());
+    else showError(hlsFailureText());
+  }
 
   if (!Hls.isSupported() && video.canPlayType('application/vnd.apple.mpegurl')) {
     video.src = url;
@@ -1132,6 +1291,12 @@ function loadHLS(url, onSuccess, onFail) {
     return;
   }
 
+  clearTimeout(hlsManifestWatchdog);
+  hlsManifestWatchdog = setTimeout(() => {
+    if (attemptId !== playbackAttemptId || manifestParsed) return;
+    failHls('manifest timeout', { type: 'manifest', details: 'manifest timeout', fatal: true });
+  }, HLS_MANIFEST_TIMEOUT_MS);
+
   hlsInstance = new Hls({
     maxBufferLength: 30,
     maxMaxBufferLength: 60,
@@ -1145,27 +1310,45 @@ function loadHLS(url, onSuccess, onFail) {
   hlsInstance.attachMedia(video);
 
   hlsInstance.on(Hls.Events.MANIFEST_PARSED, (e, data) => {
+    manifestParsed = true;
+    clearTimeout(hlsManifestWatchdog);
+    hlsManifestWatchdog = null;
     populateQualities(data.levels);
     video.play().catch(() => {});
     setEngineTry('hls', 'success');
     setEngineBadge('hls');
+    startStartupWatchdog(
+      attemptId,
+      HLS_PLAYBACK_TIMEOUT_MS,
+      'HLS manifest loaded but playback did not start. Trying next HLS link...'
+    );
     if (onSuccess) onSuccess();
   });
 
   hlsInstance.on(Hls.Events.ERROR, (e, data) => {
+    recordHlsFailure(data, data && data.details ? data.details : 'HLS error');
     if (data.fatal) {
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        setStatus('buffer', 'Network error, retrying...');
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < HLS_MAX_NETWORK_RECOVERIES) {
+        networkRecoveries += 1;
+        ovLoadMsg.textContent = `HLS network recovery ${networkRecoveries}/${HLS_MAX_NETWORK_RECOVERIES}...`;
+        setStatus('buffer', 'Recovering HLS network...');
         hlsInstance.startLoad();
-      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-        setStatus('buffer', 'Media error, recovering...');
-        hlsInstance.recoverMediaError();
-      } else {
-        hlsInstance.destroy(); hlsInstance = null;
-        setEngineTry('hls', 'failed');
-        if (onFail) onFail('HLS fatal error');
-        else showError('HLS stream failed. Try another link.');
+        startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
+        return;
       }
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < HLS_MAX_MEDIA_RECOVERIES) {
+        mediaRecoveries += 1;
+        ovLoadMsg.textContent = `HLS media recovery ${mediaRecoveries}/${HLS_MAX_MEDIA_RECOVERIES}...`;
+        setStatus('buffer', 'Recovering HLS media...');
+        hlsInstance.recoverMediaError();
+        startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
+        return;
+      }
+      failHls('fatal error', data);
+    } else if (playbackStarted) {
+      startStallWatchdog(playbackAttemptId, 'HLS stalled. Trying next HLS link...', HLS_STALL_TIMEOUT_MS);
+    } else if (data && data.details) {
+      ovLoadMsg.textContent = `HLS warning: ${data.details}`;
     }
   });
 }
@@ -1212,8 +1395,18 @@ async function loadShaka(url, mimeHint, onSuccess, onFail) {
   });
 
   shakaPlayer.addEventListener('buffering', (e) => {
-    if (e.buffering) setStatus('buffer', 'Buffering...');
-    else setStatus('live', 'Stream live');
+    if (e.buffering) {
+      setStatus('buffer', 'Buffering...');
+      startStallWatchdog(playbackAttemptId, 'DASH buffering too long. Trying next link...');
+    } else {
+      setStatus('live', 'Stream live');
+      clearTimeout(stallWatchdog);
+      stallWatchdog = null;
+    }
+  });
+
+  shakaPlayer.addEventListener('stalldetected', () => {
+    startStallWatchdog(playbackAttemptId, 'DASH playback stalled. Trying next link...');
   });
 
   try {
@@ -1327,7 +1520,7 @@ function initPlayer(url, typeOverride) {
       break;
     case TYPE_HLS:
       buildEngineTries(['hls']);
-      loadHLS(url, null, (e) => showError('HLS failed: ' + e));
+      loadHLS(url, null, (e) => showError(e || 'HLS failed'));
       break;
     case TYPE_NATIVE:
       loadNative(url);
@@ -1348,12 +1541,21 @@ function updateVolIcon() {
   const muted = video.muted || video.volume == 0;
   icoVol.style.display  = muted ? 'none'  : 'block';
   icoMute.style.display = muted ? 'block' : 'none';
+  btnMute.title = muted ? 'Unmute' : 'Mute';
+  volSlider.value = muted ? 0 : video.volume;
 }
 
 video.addEventListener('play',  () => { icoPlay.style.display='none'; icoPause.style.display='block'; });
 video.addEventListener('pause', () => { icoPlay.style.display='block'; icoPause.style.display='none'; });
-video.addEventListener('waiting', () => { ovLoad.classList.remove('hidden'); ovLoadMsg.textContent = 'Buffering...'; setStatus('buffer', 'Buffering...'); });
-video.addEventListener('canplay', () => { ovLoad.classList.add('hidden'); });
+video.addEventListener('waiting', () => {
+  ovLoad.classList.remove('hidden');
+  ovLoadMsg.textContent = 'Buffering...';
+  setStatus('buffer', 'Buffering...');
+  startStallWatchdog(playbackAttemptId, 'Buffering too long. Trying next link...');
+});
+video.addEventListener('canplay', () => {
+  if (playbackStarted) ovLoad.classList.add('hidden');
+});
 video.addEventListener('playing', () => {
   ovLoad.classList.add('hidden');
   ovErr.classList.add('hidden');
@@ -1363,20 +1565,18 @@ video.addEventListener('playing', () => {
     setEngineTry('native', 'success');
   }
   
-  // Mark success
-  const activeLnk = STREAM_LINKS[activeIndex];
-  if (activeLnk) {
-    activeLnk.success = true;
-    activeLnk.failCount = 0;
-    sortAndRebuildLinks();
-  }
+  markPlaybackHealthy();
 });
-video.addEventListener('stalled', () => setStatus('buffer', 'Stream stalled...'));
+video.addEventListener('stalled', () => {
+  setStatus('buffer', 'Stream stalled...');
+  startStallWatchdog(playbackAttemptId, 'Stream stalled. Trying next link...');
+});
 video.addEventListener('error',   () => {
   if (!shakaPlayer && !hlsInstance) {
     showError('Video error. Try another link.');
   }
 });
+video.addEventListener('volumechange', updateVolIcon);
 
 const LIVE_THRESHOLD = 3600 * 10;
 function isLive() {
@@ -1384,6 +1584,10 @@ function isLive() {
 }
 
 video.addEventListener('timeupdate', () => {
+  const currentPosition = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+  if (currentPosition > lastProgressPosition + 0.25) {
+    markPlaybackHealthy();
+  }
   if (isLive()) {
     progBar.style.width = '100%';
     timeLbl.textContent = '● LIVE';
@@ -1400,15 +1604,21 @@ video.addEventListener('timeupdate', () => {
 ═══════════════════════════════════════════════════════════════ */
 btnPlay.addEventListener('click', () => { video.paused ? video.play() : video.pause(); });
 volSlider.addEventListener('input', () => {
-  video.volume = volSlider.value;
-  video.muted = volSlider.value == 0;
+  const volume = Number(volSlider.value);
+  video.volume = volume;
+  video.muted = volume === 0;
   updateVolIcon();
 });
 btnMute.addEventListener('click', () => {
-  video.muted = !video.muted;
-  volSlider.value = video.muted ? 0 : video.volume || 1;
+  if (video.muted || video.volume == 0) {
+    if (video.volume == 0) video.volume = 1;
+    video.muted = false;
+  } else {
+    video.muted = true;
+  }
   updateVolIcon();
 });
+updateVolIcon();
 btnFs.addEventListener('click', () => {
   document.fullscreenElement ? document.exitFullscreen() : vwrap.requestFullscreen();
 });
@@ -1427,24 +1637,16 @@ vwrap.addEventListener('touchstart', () => {
    RETRY
 ═══════════════════════════════════════════════════════════════ */
 retryBtn.addEventListener('click', () => {
-  let nextIdx = -1;
-  let nextUntried = STREAM_LINKS.findIndex((l, i) => i !== activeIndex && l.failCount === 0 && l.url);
-  if (nextUntried !== -1) {
-    nextIdx = nextUntried;
-  } else {
-    let minFail = Infinity;
-    let bestIdx = -1;
-    STREAM_LINKS.forEach((l, i) => {
-      if (i !== activeIndex && l.url) {
-        if (l.failCount < minFail) {
-          minFail = l.failCount;
-          bestIdx = i;
-        }
-      }
-    });
-    nextIdx = bestIdx;
+  if (retryBtn.dataset.action === 'fallback') {
+    retryBtn.dataset.action = 'retry';
+    preferredFailoverType = null;
+    const fallbackIdx = findNextLinkIndex(null);
+    if (fallbackIdx !== -1) switchStream(fallbackIdx);
+    else location.reload();
+    return;
   }
-  if (nextIdx !== -1) switchStream(nextIdx);
+  const nextIdx = findNextLinkIndex(preferredFailoverType);
+  if (nextIdx !== -1) switchStream(nextIdx, { preserveFailover: true });
   else location.reload();
 });
 
@@ -1452,9 +1654,10 @@ retryBtn.addEventListener('click', () => {
    LINK LIST UI
 ═══════════════════════════════════════════════════════════════ */
 const BADGE_LABELS = {
-  hd:'HD', sd:'SD', eng:'ENG', ara:'ARA', ios:'🍎 iPhone',
-  auto:'AUTO', dash:'DASH', hls:'HLS', mp4:'MP4', iframe:'EMBED'
-};
+	  hd:'HD', sd:'SD', eng:'ENG', ara:'ARA', ios:'🍎 iPhone',
+	  backup:'BACKUP',
+	  auto:'AUTO', dash:'DASH', hls:'HLS', mp4:'MP4', iframe:'EMBED'
+	};
 
 function buildLinks() {
   linksList.innerHTML = '';
@@ -1483,7 +1686,7 @@ function buildLinks() {
       </span>
     `;
 
-    if (lnk.url) row.addEventListener('click', () => switchStream(i));
+    if (lnk.url) row.addEventListener('click', () => switchStream(i, { manual: true }));
     linksList.appendChild(row);
   });
 }
@@ -1495,11 +1698,18 @@ function setActive(idx) {
   });
 }
 
-function switchStream(idx) {
+function switchStream(idx, options = {}) {
   const lnk = STREAM_LINKS[idx];
   if (!lnk || !lnk.url) return;
+  if (options.manual) {
+    preferredFailoverType = lnk.type;
+  } else if (!options.preserveFailover) {
+    preferredFailoverType = null;
+  }
   setActive(idx);
   destroyAll();
+  const attemptId = ++playbackAttemptId;
+  resetPlaybackHealth();
   setEngineBadge('none');
   ovErr.classList.add('hidden');
   ovNone.classList.add('hidden');
@@ -1507,6 +1717,11 @@ function switchStream(idx) {
   ovLoadMsg.textContent = 'Detecting stream type...';
   engineList.innerHTML = '';
   setStatus('buffer', 'Connecting...');
+  const startupTimeout = lnk.type === 'hls' ? HLS_PLAYBACK_TIMEOUT_MS : STARTUP_TIMEOUT_MS;
+  const startupMessage = lnk.type === 'hls'
+    ? 'HLS playback did not start. Trying next HLS link...'
+    : 'No playback detected. Trying next link...';
+  startStartupWatchdog(attemptId, startupTimeout, startupMessage);
   initPlayer(lnk.url, lnk.type);
 }
 
@@ -1523,14 +1738,26 @@ const paramLink  = params.get('link') || params.get('stream') || params.get('s')
 if (paramLink) {
   const linkIdx = parseInt(paramLink, 10) - 1;
   if (linkIdx >= 0 && linkIdx < STREAM_LINKS.length) {
-    switchStream(linkIdx);
+    switchStream(linkIdx, { manual: true });
   } else {
     const firstIdx = STREAM_LINKS.findIndex(l => l.url);
     if (firstIdx !== -1) switchStream(firstIdx);
   }
 } else if (paramUrl) {
   const matchIdx = STREAM_LINKS.findIndex(l => l.url === paramUrl);
-  if (matchIdx !== -1) setActive(matchIdx);
+  if (matchIdx !== -1) {
+    setActive(matchIdx);
+    preferredFailoverType = STREAM_LINKS[matchIdx].type;
+  } else if (paramType && paramType !== 'auto') {
+    preferredFailoverType = paramType;
+  }
+  const attemptId = ++playbackAttemptId;
+  resetPlaybackHealth();
+  const startupTimeout = paramType === 'hls' ? HLS_PLAYBACK_TIMEOUT_MS : STARTUP_TIMEOUT_MS;
+  const startupMessage = paramType === 'hls'
+    ? 'HLS playback did not start. Trying next HLS link...'
+    : 'No playback detected. Trying next link...';
+  startStartupWatchdog(attemptId, startupTimeout, startupMessage);
   initPlayer(paramUrl, paramType);
 } else {
   const firstIdx = STREAM_LINKS.findIndex(l => l.url);
@@ -1564,12 +1791,32 @@ bootstrapPlayer();
 </body>
 </html>"""
 
-DEFAULT_PLAYER_AD_SCRIPT = '<script src="https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js"></script>'
+DEFAULT_PLAYER_AD_SCRIPT = '<script async src="https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js"></script>'
+
+
+def async_external_scripts(code):
+    if not code:
+        return ""
+
+    def add_async(match):
+        attrs = match.group(1) or ""
+        if not re.search(r"\ssrc\s*=", attrs, flags=re.IGNORECASE):
+            return match.group(0)
+        if re.search(r"\s(async|defer)(\s|=|>|$)", attrs, flags=re.IGNORECASE):
+            return match.group(0)
+        return f"<script async{attrs}></script>"
+
+    return re.sub(
+        r"<script\b([^>]*)>\s*</script>",
+        add_async,
+        str(code),
+        flags=re.IGNORECASE,
+    )
 
 
 def player_ad_code(player_config, key, default=""):
     ads = player_config.get("ads") or {}
-    return ads.get(key) or default
+    return async_external_scripts(ads.get(key) or default)
 
 
 def render_player_smartlink(player_config):
@@ -2133,8 +2380,8 @@ def parse_manifest_quality(text, stream_type):
 
 def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, status_code=None):
     base = {
-        "hls": 340,
-        "dash": 310,
+        "dash": 360,
+        "hls": 320,
         "native": 260,
         "iframe": 190,
     }.get(stream_type, 120)
@@ -2154,8 +2401,8 @@ def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, sta
         elif bandwidth >= 1000000:
             base += 20
 
-    if stream_type in ("hls", "native"):
-        base += 25  # smartphone-friendly tie breaker
+    if stream_type == "native":
+        base += 25  # smartphone-friendly tie breaker for plain video files
     if status_code in (301, 302, 307, 308):
         base -= 10
     if latency_ms is not None:
@@ -2163,10 +2410,156 @@ def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, sta
     return base
 
 
-def probe_stream_url(url, stream_type):
+def infer_stream_type_from_url(url):
+    parsed = urlparse(url)
+    path_lower = parsed.path.lower()
+    if path_lower.endswith(".mpd") or "manifest.mpd" in path_lower or "/dash/" in path_lower:
+        return "dash"
+    if path_lower.endswith(".m3u8") or "playlist.m3u8" in path_lower or "/hls/" in path_lower:
+        return "hls"
+    if any(path_lower.endswith(ext) for ext in [".mp4", ".webm", ".ogg", ".ts", ".mkv"]):
+        return "native"
+    return "iframe"
+
+
+def extract_embedded_stream_url(url):
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    preferred_keys = ("src", "url", "file", "dtv", "hls", "mpd", "get", "b4x", "source")
+
+    def normalize_candidate(value):
+        value = unquote(str(value or "").strip())
+        if value.startswith(("http://", "https://")):
+            return value
+        try:
+            padded = value + "=" * (-len(value) % 4)
+            decoded = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8", errors="ignore").strip()
+            if decoded.startswith(("http://", "https://")):
+                return decoded
+        except Exception:
+            pass
+        return ""
+
+    for key in preferred_keys:
+        for value in params.get(key, []):
+            candidate = normalize_candidate(value)
+            if candidate and infer_stream_type_from_url(candidate) in ("hls", "dash", "native"):
+                return candidate
+    for values in params.values():
+        for value in values:
+            candidate = normalize_candidate(value)
+            if candidate and infer_stream_type_from_url(candidate) in ("hls", "dash", "native"):
+                return candidate
+    return ""
+
+
+def response_cors_ok(response):
+    origin = response.headers.get("access-control-allow-origin", "")
+    return origin in ("*", "https://qtwc2022.blogspot.com") or bool(origin)
+
+
+def read_stream_text(response, max_bytes=200000):
+    chunks = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=8192):
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total >= max_bytes:
+            break
+    return b"".join(chunks).decode("utf-8", errors="ignore")
+
+
+def first_playlist_uri(manifest_text):
+    for line in manifest_text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return line
+    return ""
+
+
+def probe_hls_media(manifest_url, manifest_text, headers):
+    first_uri = first_playlist_uri(manifest_text)
+    if not first_uri:
+        return False, "hls-no-media-uri", None
+
+    child_url = urljoin(manifest_url, first_uri)
+    response = requests.get(child_url, headers=headers, timeout=6, stream=True, allow_redirects=True)
+    status_code = response.status_code
+    if response.status_code not in (200, 206):
+        response.close()
+        return False, f"hls-child-http-{status_code}", status_code
+
+    content = read_stream_text(response, max_bytes=65536)
+    response.close()
+    if content.lstrip().startswith("#EXTM3U"):
+        media_uri = first_playlist_uri(content)
+        if not media_uri:
+            return False, "hls-child-no-media-uri", status_code
+        media_url = urljoin(child_url, media_uri)
+        media_response = requests.get(media_url, headers=headers, timeout=6, stream=True, allow_redirects=True)
+        media_status = media_response.status_code
+        media_response.close()
+        if media_status not in (200, 206):
+            return False, f"hls-media-http-{media_status}", media_status
+        return True, "hls-media-ok", media_status
+
+    return True, "hls-media-ok", status_code
+
+
+def dash_manifest_kids(manifest_text):
+    kids = set()
+    patterns = [
+        r"default_KID=[\"']([0-9a-fA-F-]{32,36})[\"']",
+        r"cenc:default_KID=[\"']([0-9a-fA-F-]{32,36})[\"']",
+    ]
+    for pattern in patterns:
+        kids.update(value.lower().replace("-", "") for value in re.findall(pattern, manifest_text))
+    return kids
+
+
+def probe_dash_init_segment(manifest_url, manifest_bytes, headers):
+    try:
+        root = ET.fromstring(manifest_bytes)
+    except Exception:
+        return False, "dash-xml-parse-failed", None
+
+    representations = root.findall(".//{*}Representation")
+    templates = root.findall(".//{*}SegmentTemplate")
+    if not representations or not templates:
+        return True, "dash-manifest-ok", None
+
+    representation = representations[0]
+    template = templates[0]
+    init_template = template.attrib.get("initialization", "")
+    if not init_template:
+        return True, "dash-manifest-ok", None
+
+    base_url = ""
+    base_el = root.find(".//{*}BaseURL")
+    if base_el is not None and base_el.text:
+        base_url = base_el.text.strip()
+
+    init_path = (
+        init_template
+        .replace("$RepresentationID$", representation.attrib.get("id", ""))
+        .replace("$Bandwidth$", representation.attrib.get("bandwidth", ""))
+    )
+    init_url = urljoin(manifest_url, urljoin(base_url, init_path))
+    response = requests.get(init_url, headers=headers, timeout=6, stream=True, allow_redirects=True)
+    status_code = response.status_code
+    response.close()
+    if status_code not in (200, 206):
+        return False, f"dash-init-http-{status_code}", status_code
+    return True, "dash-init-ok", status_code
+
+
+def probe_stream_url(url, stream_type, clear_keys=None):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://www.rd9sports.pro/"
+        "Referer": "https://www.rd9sports.pro/",
+        "Origin": "https://qtwc2022.blogspot.com",
     }
     result = {
         "working": False,
@@ -2176,40 +2569,82 @@ def probe_stream_url(url, stream_type):
         "bandwidth": None,
         "score": 0,
         "error": "",
+        "validation_status": "failed",
+        "validation_reason": "",
+        "content_type": "",
+        "media_probe_status": None,
+        "cors_ok": None,
+        "backup": False,
+        "is_vod": False,
     }
     if not url.startswith("http"):
         result["error"] = "non-http-url"
+        result["validation_reason"] = "non-http-url"
         return result
     try:
         started = time.monotonic()
         r = requests.get(url, headers=headers, timeout=6, stream=True, allow_redirects=True)
         result["latency_ms"] = int((time.monotonic() - started) * 1000)
         result["status_code"] = r.status_code
+        result["content_type"] = r.headers.get("content-type", "")
+        result["cors_ok"] = response_cors_ok(r)
         ok_statuses = (200, 206, 301, 302, 307, 308)
         if stream_type == "iframe":
             ok_statuses = ok_statuses + (401, 403)
         if r.status_code not in ok_statuses:
             result["error"] = f"http-{r.status_code}"
+            result["validation_reason"] = result["error"]
             print(f"[-] Stream URL validation failed for {url} with status {r.status_code}")
             return result
 
         manifest_text = ""
+        manifest_bytes = b""
         if stream_type in ("hls", "dash"):
-            chunks = []
-            total = 0
-            for chunk in r.iter_content(chunk_size=8192):
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                total += len(chunk)
-                if total >= 200000:
-                    break
-            manifest_text = b"".join(chunks).decode("utf-8", errors="ignore")
+            manifest_bytes = b"".join(r.iter_content(chunk_size=8192))
+            manifest_text = manifest_bytes[:200000].decode("utf-8", errors="ignore")
         r.close()
+
+        if stream_type == "hls":
+            if not manifest_text.lstrip().startswith("#EXTM3U"):
+                result["error"] = "html-instead-of-hls-manifest"
+                result["validation_reason"] = result["error"]
+                return result
+            media_ok, media_reason, media_status = probe_hls_media(r.url, manifest_text, headers)
+            result["media_probe_status"] = media_status
+            if not media_ok:
+                result["error"] = media_reason
+                result["validation_reason"] = media_reason
+                return result
+            result["validation_reason"] = media_reason
+            if "#EXT-X-PLAYLIST-TYPE:VOD" in manifest_text.upper():
+                result["backup"] = True
+                result["is_vod"] = True
+                result["validation_reason"] = "vod-playlist-backup"
+
+        elif stream_type == "dash":
+            if "<MPD" not in manifest_text:
+                result["error"] = "invalid-dash-manifest"
+                result["validation_reason"] = result["error"]
+                return result
+            manifest_kids = dash_manifest_kids(manifest_text)
+            provided_keys = set((clear_keys or {}).keys())
+            missing_keys = manifest_kids - provided_keys
+            if missing_keys:
+                result["backup"] = True
+                result["validation_reason"] = "drm-key-missing-backup"
+            init_ok, init_reason, init_status = probe_dash_init_segment(r.url, manifest_bytes, headers)
+            result["media_probe_status"] = init_status
+            if not init_ok:
+                result["error"] = init_reason
+                result["validation_reason"] = init_reason
+                return result
+            if not result["validation_reason"]:
+                result["validation_reason"] = init_reason
 
         quality = parse_manifest_quality(manifest_text, stream_type)
         result.update(quality)
         result["working"] = True
+        result["validation_status"] = "backup" if result["backup"] else "ok"
         result["score"] = score_stream_probe(
             stream_type,
             result["latency_ms"],
@@ -2217,9 +2652,12 @@ def probe_stream_url(url, stream_type):
             bandwidth=result["bandwidth"],
             status_code=result["status_code"],
         )
+        if result["backup"]:
+            result["score"] -= 180
         return result
     except Exception as e:
         result["error"] = str(e)
+        result["validation_reason"] = str(e)
         print(f"[-] Stream URL validation failed for {url} with exception: {e}")
         return result
 
@@ -2575,29 +3013,38 @@ def main():
                 print(f"[-] Skipping {label_raw}: No stream URL resolved.")
                 continue
                 
-            for s_idx, stream_url in enumerate(details["streams"], 1):
-                if stream_url in seen_urls:
+            for s_idx, original_stream_url in enumerate(details["streams"], 1):
+                playback_url = original_stream_url
+                embedded_stream_url = extract_embedded_stream_url(original_stream_url)
+                s_type = infer_stream_type_from_url(original_stream_url)
+                if s_type == "iframe" and embedded_stream_url:
+                    playback_url = embedded_stream_url
+                    s_type = infer_stream_type_from_url(playback_url)
+
+                if playback_url in seen_urls:
                     print(f"[-] Skipping duplicate stream URL for: {label_raw} (Stream {s_idx})")
                     continue
-                
-                # Determine type of this specific stream
-                url_lower = stream_url.lower()
-                if ".mpd" in url_lower:
-                    s_type = "dash"
-                elif ".m3u8" in url_lower:
-                    s_type = "hls"
-                elif any(ext in url_lower for ext in [".mp4", ".webm", ".ogg", ".ts", ".mkv"]):
-                    s_type = "native"
-                else:
-                    s_type = "iframe"
-                    
-                # Check if the stream link is responsive/active and collect ranking data.
-                probe = probe_stream_url(stream_url, s_type)
+
+                clear_keys_for_probe = details["clear_keys"] if s_type == "dash" else {}
+
+                # Check if the stream link is responsive/playable and collect ranking data.
+                probe = probe_stream_url(playback_url, s_type, clear_keys=clear_keys_for_probe)
+                if not probe.get("working") and playback_url != original_stream_url:
+                    backup_probe = probe_stream_url(original_stream_url, "iframe")
+                    if backup_probe.get("working"):
+                        backup_probe["backup"] = True
+                        backup_probe["validation_status"] = "backup"
+                        backup_probe["validation_reason"] = f"embedded-stream-failed:{probe.get('validation_reason') or probe.get('error')}"
+                        backup_probe["score"] = min(int(backup_probe.get("score") or 0), 20)
+                        playback_url = original_stream_url
+                        s_type = "iframe"
+                        probe = backup_probe
+
                 if not probe.get("working"):
-                    print(f"[-] Skipping dead/unresponsive stream URL: {stream_url}")
+                    print(f"[-] Skipping dead/unresponsive stream URL: {playback_url} ({probe.get('validation_reason') or probe.get('error')})")
                     continue
 
-                seen_urls.add(stream_url)
+                seen_urls.add(playback_url)
                     
                 # Clear keys only for DASH
                 s_keys = details["clear_keys"] if s_type == "dash" else {}
@@ -2605,7 +3052,7 @@ def main():
                 # Parse badges from label contents or types
                 badges = [s_type]
                 label_lower = label_raw.lower()
-                if "hd" in label_lower or "hd" in stream_url.lower():
+                if "hd" in label_lower or "hd" in playback_url.lower():
                     badges.append("hd")
                 if "sd" in label_lower:
                     badges.append("sd")
@@ -2613,8 +3060,10 @@ def main():
                     badges.append("eng")
                 if "ara" in label_lower or "arabic" in label_lower:
                     badges.append("ara")
-                if "ios" in label_lower or "ios" in stream_url.lower() or "iphone" in label_lower:
+                if "ios" in label_lower or "ios" in playback_url.lower() or "iphone" in label_lower:
                     badges.append("ios")
+                if probe.get("backup"):
+                    badges.append("backup")
                     
                 badges = list(dict.fromkeys(badges))
                 
@@ -2635,6 +3084,8 @@ def main():
                     meta_parts.append(f"{probe['height']}p")
                 if probe.get("latency_ms") is not None:
                     meta_parts.append(f"{probe['latency_ms']} ms")
+                if probe.get("validation_reason") and probe.get("backup"):
+                    meta_parts.append("Backup")
                 
                 if "eng" in badges:
                     meta_parts.append("English Audio")
@@ -2648,7 +3099,8 @@ def main():
                     "label_raw": label_raw,
                     "root_target_url": res["root_target_url"],
                     "root_origin_url": res.get("root_origin_url"),
-                    "stream_url": stream_url,
+                    "stream_url": playback_url,
+                    "original_stream_url": original_stream_url,
                     "stream_type": s_type,
                     "clear_keys": s_keys,
                     "badges": badges,
@@ -2657,8 +3109,11 @@ def main():
                     "score": probe.get("score", 0)
                 })
 
-        # Sort resolved streams by measured score first, then stable type priority.
+        # Sort by playback policy first: all working DASH links, then HLS, native, iframe.
+        # Probe score is only used within the same type so HLS/iframe cannot outrank DASH.
         def get_type_priority(item):
+            if (item.get("probe") or {}).get("backup"):
+                return 5
             t = item["stream_type"]
             if t == "dash":
                 return 0
@@ -2670,7 +3125,7 @@ def main():
                 return 3
             return 4
 
-        resolved_items.sort(key=lambda item: (-int(item.get("score") or 0), get_type_priority(item)))
+        resolved_items.sort(key=lambda item: (get_type_priority(item), -int(item.get("score") or 0)))
         resolved_items = resolved_items[:20]
 
         # Label and build the final STREAM_LINKS array

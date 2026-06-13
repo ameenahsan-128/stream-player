@@ -26,12 +26,32 @@ DEFAULT_AD_POPUNDER = '<script type="text/javascript" src="https://throughalivem
 DEFAULT_AD_SOCIAL_BAR = '<script type="text/javascript" src="https://throughalivemedication.com/66/f1/17/66f11775fe2744312299821ac71b38f1.js"></script>'
 
 
+def async_external_scripts(html_content):
+    if not html_content:
+        return ""
+
+    def add_async(match):
+        attrs = match.group(1) or ""
+        if not re.search(r"\ssrc\s*=", attrs, flags=re.IGNORECASE):
+            return match.group(0)
+        if re.search(r"\s(async|defer)(\s|=|>|$)", attrs, flags=re.IGNORECASE):
+            return match.group(0)
+        return f"<script async{attrs}></script>"
+
+    return re.sub(
+        r"<script\b([^>]*)>\s*</script>",
+        add_async,
+        str(html_content),
+        flags=re.IGNORECASE,
+    )
+
+
 def render_popup_ad(ad_content, delay_ms=3000):
     return f"""
 <div id="popup-ad-overlay" style="align-items: center; background: rgba(0, 0, 0, 0.6); display: none; height: 100%; justify-content: center; left: 0; position: fixed; top: 0; width: 100%; z-index: 99999;">
   <div style="background: #ffffff; border-radius: 8px; padding: 10px; position: relative;">
     <button onclick="document.getElementById('popup-ad-overlay').style.display='none'" style="background: #333333; border: none; color: white; cursor: pointer; font-size: 16px; height: 26px; line-height: 1; position: absolute; right: -12px; top: -12px; width: 26px; border-radius: 50%;">&times;</button>
-    {ad_content}
+    {async_external_scripts(ad_content)}
   </div>
 </div>
 <script type="text/javascript">
@@ -407,7 +427,7 @@ def streaming_page_url_seed_title(match, config=None):
 
 def ad_top(config):
     ads = config.get("ads") or {}
-    return ads.get("top_300x250") or config.get("ad_code_top") or DEFAULT_AD_TOP
+    return async_external_scripts(ads.get("top_300x250") or config.get("ad_code_top") or DEFAULT_AD_TOP)
 
 
 def ad_bottom(config):
@@ -418,7 +438,7 @@ def ad_bottom(config):
     if popup_content:
         bottom = render_popup_ad(popup_content, delay_ms)
     elif config.get("ad_code_bottom"):
-        bottom = config.get("ad_code_bottom")
+        bottom = async_external_scripts(config.get("ad_code_bottom"))
     else:
         bottom = render_popup_ad(DEFAULT_AD_TOP, delay_ms)
 
@@ -426,9 +446,9 @@ def ad_bottom(config):
     popunder = ads.get("popunder") or DEFAULT_AD_POPUNDER
     social_bar = ads.get("social_bar") or DEFAULT_AD_SOCIAL_BAR
     if popunder:
-        extras.append(popunder)
+        extras.append(async_external_scripts(popunder))
     if social_bar:
-        extras.append(social_bar)
+        extras.append(async_external_scripts(social_bar))
     return bottom + "\n" + "\n".join(extras)
 
 
@@ -548,10 +568,10 @@ def default_channel_rows(ctx):
     update_text = "Updated 15 minutes prior to the match."
     rows = [
         ("Worldwide", update_text),
-        ("United States", "FOX / FS1 / FuboTV, subject to fixture listing."),
-        ("United Kingdom", "BBC / ITV, subject to fixture listing."),
-        ("Canada", "TSN / CTV, subject to fixture listing."),
-        ("Australia", "SBS / SBS On Demand, subject to fixture listing."),
+        ("United States", "FOX / FS1 / FuboTV, subject to broadcast availability."),
+        ("United Kingdom", "BBC / ITV, subject to broadcast availability."),
+        ("Canada", "TSN / CTV, subject to broadcast availability."),
+        ("Australia", "SBS / SBS On Demand, subject to broadcast availability."),
         ("India", update_text),
     ]
     for team in (ctx["team1"], ctx["team2"]):
@@ -605,37 +625,7 @@ def render_channel_country_table(ctx, match, config):
 
 
 def render_countdown(match, safe_name):
-    match_time = escape(str(match.get("match_time", "")), quote=True)
-    return f"""
-  <div style="background:#f7f9fa; border:1px solid #e1e8ed; border-radius:6px; padding:15px; text-align:center; margin:18px 0 24px;">
-    <div style="font-size:11px; text-transform:uppercase; color:#555555; letter-spacing:1.5px; margin-bottom:8px; font-weight:bold;">Match coverage starts in</div>
-    <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
-      <div style="min-width:55px;"><span id="days-{safe_name}" style="font-size:22px; font-weight:bold; color:#006600;">00</span><div style="font-size:9px; text-transform:uppercase; color:#777777;">Days</div></div>
-      <div style="min-width:55px;"><span id="hours-{safe_name}" style="font-size:22px; font-weight:bold; color:#006600;">00</span><div style="font-size:9px; text-transform:uppercase; color:#777777;">Hrs</div></div>
-      <div style="min-width:55px;"><span id="mins-{safe_name}" style="font-size:22px; font-weight:bold; color:#006600;">00</span><div style="font-size:9px; text-transform:uppercase; color:#777777;">Mins</div></div>
-      <div style="min-width:55px;"><span id="secs-{safe_name}" style="font-size:22px; font-weight:bold; color:#006600;">00</span><div style="font-size:9px; text-transform:uppercase; color:#777777;">Secs</div></div>
-    </div>
-  </div>
-  <script type="text/javascript">
-  (function() {{
-    var kickoff = new Date("{match_time}").getTime();
-    var ids = ["days", "hours", "mins", "secs"].map(function(k) {{ return document.getElementById(k + "-{safe_name}"); }});
-    function tick() {{
-      var diff = kickoff - Date.now();
-      if (diff <= 0) diff = 0;
-      var days = Math.floor(diff / 86400000);
-      var hours = Math.floor((diff % 86400000) / 3600000);
-      var mins = Math.floor((diff % 3600000) / 60000);
-      var secs = Math.floor((diff % 60000) / 1000);
-      [days, hours, mins, secs].forEach(function(v, i) {{
-        if (ids[i]) ids[i].textContent = String(v).padStart(2, "0");
-      }});
-    }}
-    tick();
-    setInterval(tick, 1000);
-  }})();
-  </script>
-"""
+    return ""
 
 
 def render_status_pill(state):
@@ -739,149 +729,18 @@ def replace_widget_placeholders(template, ctx, match, url_encode=False):
 
 
 def render_fixture_table_widget(config, match, ctx, state="upcoming"):
-    fixture_id = re.sub(r"[^a-z0-9_-]+", "-", ctx["safe_name"].lower()).strip("-") or "match"
-    initial_status = {
-        "upcoming": "NS",
-        "preparing": "NS",
-        "live": "STARTED",
-        "ended": "FT",
-    }.get(state, "NS")
-    kickoff = escape(str(match.get("match_time", "")), quote=True)
-    return f"""
-  <table border="0" cellpadding="0" cellspacing="0" style="background:#ffffff; border-collapse:separate; border-spacing:0; border:1px solid #111111; color:#111111; margin:14px 0; overflow:hidden; text-align:center; width:100%; box-shadow:0 6px 18px rgba(0,0,0,.10);">
-    <tbody>
-      <tr>
-        <td colspan="3" style="background:#006600; border:1px solid #111111; color:#ffffff; font-size:17px; font-weight:900; padding:12px 10px; text-transform:uppercase;">Match Fixture</td>
-      </tr>
-      <tr style="background:#111111; color:#ffffff; height:40px; text-transform:uppercase;">
-        <td style="border:1px solid #111111; padding:8px; width:34%; font-weight:800;">Home</td>
-        <td style="border:1px solid #111111; padding:8px; width:32%; font-weight:800;">Kickoff</td>
-        <td style="border:1px solid #111111; padding:8px; width:34%; font-weight:800;">Away</td>
-      </tr>
-      <tr>
-        <td style="background:#fafafa; border:1px solid #d6d6d6; padding:18px 10px; vertical-align:middle;">
-          <div style="font-size:18px; font-weight:900; line-height:1.25; text-transform:uppercase;">{escape(ctx["team1"])}</div>
-          <div style="color:#666666; font-size:12px; font-weight:800; margin-top:5px; text-transform:uppercase;">Home</div>
-        </td>
-        <td style="background:#ffffff; border:1px solid #d6d6d6; padding:13px 8px; vertical-align:middle;">
-          <span id="fixture-status-{fixture_id}" style="display:inline-block; background:#f4c430; border:1px solid #111111; border-radius:4px; color:#111111; min-width:64px; padding:7px 9px; font-size:12px; font-weight:900; margin-bottom:8px;">{escape(initial_status)}</span>
-          <div style="color:#006600; font-size:11px; font-weight:900; letter-spacing:.8px; margin:0 0 7px; text-transform:uppercase;">Kickoff Counter</div>
-          <div id="fixture-counter-{fixture_id}" style="display:flex; gap:5px; justify-content:center; flex-wrap:wrap;">
-            <span style="background:#111111; color:#ffffff; display:inline-block; min-width:42px; padding:7px 4px; font-size:12px; font-weight:900;">00d</span>
-            <span style="background:#111111; color:#ffffff; display:inline-block; min-width:42px; padding:7px 4px; font-size:12px; font-weight:900;">00h</span>
-            <span style="background:#111111; color:#ffffff; display:inline-block; min-width:42px; padding:7px 4px; font-size:12px; font-weight:900;">00m</span>
-            <span style="background:#111111; color:#ffffff; display:inline-block; min-width:42px; padding:7px 4px; font-size:12px; font-weight:900;">00s</span>
-          </div>
-          <div style="color:#333333; font-size:12px; font-weight:900; margin-top:8px;">{escape(ctx["time"])}</div>
-        </td>
-        <td style="background:#fafafa; border:1px solid #d6d6d6; padding:18px 10px; vertical-align:middle;">
-          <div style="font-size:18px; font-weight:900; line-height:1.25; text-transform:uppercase;">{escape(ctx["team2"])}</div>
-          <div style="color:#666666; font-size:12px; font-weight:800; margin-top:5px; text-transform:uppercase;">Away</div>
-        </td>
-      </tr>
-      <tr>
-        <td colspan="3" style="border:1px solid #d6d6d6; padding:11px; color:#333333; font-size:13px; font-weight:800; text-transform:uppercase;">{escape(ctx["date"])} | {escape(ctx["league"])}</td>
-      </tr>
-    </tbody>
-  </table>
-  <script type="text/javascript">
-  (function() {{
-    var kickoff = new Date("{kickoff}").getTime();
-    var counter = document.getElementById("fixture-counter-{fixture_id}");
-    var status = document.getElementById("fixture-status-{fixture_id}");
-    var ended = "{escape(state, quote=True)}" === "ended";
-    function pad(value) {{ return String(value).padStart(2, "0"); }}
-    function box(value) {{
-      return '<span style="background:#111111; color:#ffffff; display:inline-block; min-width:42px; padding:7px 4px; font-size:12px; font-weight:900;">' + value + '</span>';
-    }}
-    function tick() {{
-      if (!counter || !kickoff || isNaN(kickoff)) return;
-      if (ended) {{
-        counter.innerHTML = box("FT");
-        if (status) status.textContent = "FT";
-        return;
-      }}
-      var diff = kickoff - Date.now();
-      if (diff <= 0) {{
-        counter.innerHTML = box("STARTED");
-        if (status) status.textContent = "STARTED";
-        return;
-      }}
-      var days = Math.floor(diff / 86400000);
-      var hours = Math.floor((diff % 86400000) / 3600000);
-      var mins = Math.floor((diff % 3600000) / 60000);
-      var secs = Math.floor((diff % 60000) / 1000);
-      counter.innerHTML = box(pad(days) + "d") + box(pad(hours) + "h") + box(pad(mins) + "m") + box(pad(secs) + "s");
-    }}
-    tick();
-    setInterval(tick, 1000);
-  }})();
-  </script>
-"""
+    return ""
 
 
 def render_external_match_widget(config, match, ctx, state="upcoming"):
-    widget_html = normalize_info_value(
-        match.get("match_info_widget_html")
-        or match.get("live_score_widget_html")
-        or config.get("match_info_widget_html")
-        or config.get("live_score_widget_html")
-    )
-    if widget_html:
-        return f"""
-  <div style="background:#ffffff; border:1px solid #d8e4d8; border-radius:6px; overflow:auto; padding:8px; margin:14px 0;">
-    {replace_widget_placeholders(widget_html, ctx, match)}
-  </div>
-"""
-
-    fixture_iframe_url = normalize_info_value(
-        match.get("fixture_widget_iframe_url")
-        or config.get("fixture_widget_iframe_url")
-    )
-    if fixture_iframe_url:
-        height = int(match.get("fixture_widget_height") or config.get("fixture_widget_height") or 360)
-        iframe_src = replace_widget_placeholders(fixture_iframe_url, ctx, match, url_encode=True)
-        return f"""
-  <div style="background:#ffffff; border:1px solid #000000; overflow:hidden; margin:14px 0;">
-    <iframe src="{escape(iframe_src, quote=True)}" width="100%" height="{height}" frameborder="0" loading="lazy" style="display:block; background:#ffffff; border:0; width:100%;"></iframe>
-  </div>
-"""
-
-    if config.get("use_iframe_match_info_widget", False):
-        iframe_url = normalize_info_value(
-            match.get("match_info_widget_iframe_url")
-            or match.get("live_score_widget_iframe_url")
-            or config.get("match_info_widget_iframe_url")
-            or config.get("live_score_widget_iframe_url")
-        )
-        if iframe_url:
-            height = int(config.get("match_info_widget_height") or match.get("match_info_widget_height") or 520)
-            iframe_src = replace_widget_placeholders(iframe_url, ctx, match, url_encode=True)
-            return f"""
-  <div style="background:#000000; border:1px solid #cccccc; border-radius:6px; overflow:hidden; margin:14px 0;">
-    <iframe src="{escape(iframe_src, quote=True)}" width="100%" height="{height}" frameborder="0" loading="lazy" allowfullscreen style="display:block; background:#000000; border:0; width:100%;"></iframe>
-  </div>
-"""
-
-    return render_fixture_table_widget(config, match, ctx, state)
+    return ""
 
 
 def render_match_info_panel(config, match, ctx, state):
-    external_widget = render_external_match_widget(config, match, ctx, state)
-    countdown = "" if external_widget or state == "ended" else render_countdown(match, ctx["safe_name"])
-    if external_widget:
-        intro = "Match fixture and kickoff counter are shown below. Streaming links are added close to kickoff."
-    else:
-        intro = "Streaming links will be updated 15 minutes prior to the match. Keep this page open and refresh near kickoff."
     return f"""
   <div style="border:1px solid #d8e4d8; background:#f8fff8; padding:14px; margin:12px 0; border-radius:6px;">
     <div style="font-weight:800; color:#006600; text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px;">Broadcast Channel Info</div>
     <div style="color:#222222; line-height:1.6;">{escape(ctx["channels"])}</div>
-  </div>
-  <div style="border:1px solid #e1e8ed; background:#ffffff; padding:12px; margin:12px 0; border-radius:6px;">
-    <div style="font-size:13px; color:#333333; line-height:1.6; margin-bottom:8px;">{escape(intro)}</div>
-    {external_widget}
-    {countdown}
   </div>
 """
 
@@ -1036,9 +895,9 @@ def render_preview_post(config, match):
   {portal_row(render_match_table(ctx, include_channels=False), padding="0")}
   {portal_row(render_lineup_table(ctx, match), padding="0")}
   {portal_text_row("Match Preview", [
-      f"{ctx['team1']} vs {ctx['team2']} is scheduled for {ctx['date']} at {ctx['time']}, and the fixture brings together two sides with very different strengths.",
+      f"{ctx['team1']} vs {ctx['team2']} is scheduled for {ctx['date']} at {ctx['time']}, bringing together two sides with very different strengths.",
       f"{ctx['team1']} will look to control the tempo and create chances through quick attacking phases, while {ctx['team2']} can stay dangerous with compact defending, fast transitions and set-piece pressure.",
-      "The final channel details, countdown status and live coverage buttons are handled on the dedicated match page and are updated close to kickoff."
+      "The final channel details and live coverage buttons are handled on the dedicated match page and are updated close to kickoff."
   ])}
   {portal_row(render_square_ad(config), padding="12px")}
   {portal_header_row("Match Page", bg="#006600")}
@@ -1118,10 +977,8 @@ def render_streaming_page(config, match, state="upcoming", links_html=""):
 
     body = f"""
   {portal_header_row("Match Coverage")}
-  {portal_row(f'<div style="font-size:14px; line-height:1.6; color:#444444;">{escape(ctx["match_name"])} coverage page with broadcast information, live-score widget, countdown and coverage buttons when active.</div>', padding="10px")}
+  {portal_row(f'<div style="font-size:14px; line-height:1.6; color:#444444;">{escape(ctx["match_name"])} coverage page with broadcast information and streaming buttons when active.</div>', padding="10px")}
   {portal_row(render_channel_country_table(ctx, match, config), padding="0")}
-  {portal_header_row("Live Score / Countdown", bg="#006600")}
-  {portal_row(render_match_info_panel(config, match, ctx, state), padding="0")}
   {portal_row(render_square_ad(config), padding="12px")}
   {portal_header_row("Streaming Links", bg="#000000")}
   {portal_row(link_notice + stream_block if state == "live" and links_html else stream_block, padding="12px")}

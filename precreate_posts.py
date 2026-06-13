@@ -116,13 +116,53 @@ def create_blogger_post(config, access_token, title, html_content):
     res_data = response.json()
     return res_data.get("id"), res_data.get("url")
 
-def update_blogger_post(config, access_token, post_id, title, html_content, published=None):
+def html_has_image(html_content):
+    return bool(re.search(r"<img\b", html_content or "", flags=re.IGNORECASE))
+
+
+def extract_first_image_html(html_content):
+    match = re.search(r"<img\b[^>]*>", html_content or "", flags=re.IGNORECASE)
+    return match.group(0) if match else ""
+
+
+def preserve_existing_post_thumbnail(config, access_token, post_id, html_content):
+    if html_has_image(html_content):
+        return html_content
+
+    blog_id = config.get("blog_id")
+    url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        response = requests.get(url, headers=headers, params={"fields": "content"}, timeout=20)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"[!] Existing preview thumbnail lookup failed; continuing without preserve: {e}")
+        return html_content
+
+    image_html = extract_first_image_html((response.json() or {}).get("content", ""))
+    if not image_html:
+        return html_content
+
+    preserved = (
+        '<div style="text-align:center; margin:12px auto 10px; max-width:760px;">'
+        f'{image_html}'
+        '</div>'
+    )
+    marker = '<a name="more"></a>'
+    if marker in html_content:
+        return html_content.replace(marker, f"{preserved}\n{marker}", 1)
+    return f"{preserved}\n{html_content}"
+
+
+def update_blogger_post(config, access_token, post_id, title, html_content, published=None, preserve_existing_thumbnail=False):
     blog_id = config.get("blog_id")
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json"
     }
+    if preserve_existing_thumbnail:
+        html_content = preserve_existing_post_thumbnail(config, access_token, post_id, html_content)
     payload = {
         "kind": "blogger#post",
         "id": post_id,
@@ -1139,6 +1179,7 @@ def main():
                                     post_title,
                                     post_html,
                                     published=publish_overrides.get(match["match_key"]),
+                                    preserve_existing_thumbnail=True,
                                 )
                         else:
                             print("[*] Existing preview Post content left unchanged.")
@@ -1178,6 +1219,7 @@ def main():
                             post_title,
                             post_html,
                             published=publish_overrides.get(match["match_key"]),
+                            preserve_existing_thumbnail=True,
                         )
                         match["new_blogger_post_url"] = post_url
                         print(f"[+] Post content refreshed. URL: {post_url}")
