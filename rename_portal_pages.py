@@ -8,6 +8,7 @@ import requests
 
 from automation_config import get_portal_blog_config, has_oauth, load_automation_config
 from precreate_posts import get_access_token
+from portal_renderer import streaming_page_title
 
 
 SKIP_PAGE_WORDS = {
@@ -107,7 +108,7 @@ def title_case_team(value):
     return " ".join(words).strip()
 
 
-def desired_title_for_page(page):
+def desired_title_for_page(page, config):
     info_title = desired_info_title_for_page(page)
     if info_title:
         return info_title
@@ -126,7 +127,7 @@ def desired_title_for_page(page):
         team2 = title_case_team(match.group(2))
         if not team1 or not team2:
             continue
-        return f"{team1} vs {team2} Live Streaming Links"
+        return streaming_page_title({"match_name": f"{team1} vs {team2}"}, config)
     return None
 
 
@@ -162,7 +163,11 @@ def is_streaming_match_page(page, desired_title):
     combined = f"{page.get('title', '')} {page.get('url', '')}".lower()
     if any(word in combined for word in ("privacy", "contact", "disclaimer", "terms", "dmca", "about")):
         return False
-    return " vs " in desired_title.lower() and any(word in combined for word in ("stream", "streaming", "live"))
+    if " match info" in desired_title.lower():
+        return bool(re.search(r"\bvs\b", cleanup_match_text(combined), flags=re.IGNORECASE)) or any(
+            word in combined for word in ("stream", "streaming", "live")
+        )
+    return any(word in combined for word in ("stream", "streaming", "live"))
 
 
 def main():
@@ -184,7 +189,7 @@ def main():
     unchanged = []
     skipped = []
     for page in pages:
-        desired = desired_title_for_page(page)
+        desired = desired_title_for_page(page, config)
         if not is_streaming_match_page(page, desired):
             skipped.append(page)
             continue

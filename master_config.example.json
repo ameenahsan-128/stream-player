@@ -30,16 +30,64 @@
     "client_secret": "NEW_PORTAL_GOOGLE_CLIENT_SECRET",
     "refresh_token": "NEW_PORTAL_REFRESH_TOKEN",
     "widget_base_url": "https://yourdomain.com/widget.html",
+    "match_info_widget_html": "",
+    "match_info_widget_iframe_url": "",
+    "match_info_widget_height": 560,
     "image_base_url": "https://yourdomain.com/images",
     "default_league": "Live Sports",
+    "default_match_genre": "FIFA World Cup 2026",
     "default_quality": "HD / Auto Quality",
     "default_channel_info": "Channel details will be updated before kickoff.",
+    "bump_preview_published_on_refresh": true,
+    "world_cup_public_thumbnail_url": "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgzkohafokcIHAL_M61MiAPEda-SxOSZe2aaT3O-BxdrR7Ahh4dpaxGbMC0B8nD28ubDXhARty1t3ugIYVcJ0MjhLVcYD1Me4NA2a9zXMsHQ_dtuuWwgt9VIrTuVjzCq9GoOOw12DWAazgGK34RcMdR8ZCI5DVE36UtaXL7UGBZH0QPS4ngoBs8uNZIXBBb/s16000/USA-VS-PAR.jpg",
+    "allow_global_thumbnail_fallback": false,
+    "thumbnail_url_map": {
+      "brazil_vs_morocco": "https://blogger.googleusercontent.com/.../BRA-VS-MOR.jpg"
+    },
+    "embed_local_thumbnails_when_no_image_base_url": false,
+    "streaming_page_title_format": "{team_code} INFO",
+    "streaming_page_url_seed_format": "{team1} vs {team2} Live Streaming",
+    "team_title_codes": {
+      "Switzerland": "SWISS",
+      "Brazil": "BRAZIL",
+      "Argentina": "ARGENTINA",
+      "Portugal": "PORTUGAL",
+      "Manchester City": "MNC",
+      "Manchester United": "MNU",
+      "Real Madrid": "RMA",
+      "Barcelona": "FCB",
+      "Tottenham": "TOT",
+      "Liverpool": "LFC",
+      "Arsenal": "ARS",
+      "Chelsea": "CHE",
+      "Juventus": "JUV",
+      "PSG": "PSG"
+    },
+    "prominent_team_priority": [
+      "Brazil",
+      "Argentina",
+      "Real Madrid",
+      "Manchester City"
+    ],
     "ads": {
       "top_300x250": "<script>atOptions = {'key':'26752c18ca8361bba098d31342583042','format':'iframe','height':250,'width':300,'params':{}};</script><script src=\"https://throughalivemedication.com/26752c18ca8361bba098d31342583042/invoke.js\"></script>",
       "popup_300x250": "<script>atOptions = {'key':'26752c18ca8361bba098d31342583042','format':'iframe','height':250,'width':300,'params':{}};</script><script src=\"https://throughalivemedication.com/26752c18ca8361bba098d31342583042/invoke.js\"></script>",
       "popunder": "<script src=\"https://throughalivemedication.com/45/96/a9/4596a9a27ac7c137dd494fd1f200edbb.js\"></script>",
       "social_bar": "<script src=\"https://throughalivemedication.com/66/f1/17/66f11775fe2744312299821ac71b38f1.js\"></script>"
-    }
+    },
+    "world_cup_page_hero_image_url": "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgPOCakFvb2ltZ1dd9CzkCAB8LjMCYJ55i9QW7FmwtBcuIYre8l8KBLpQxML2pTCnxYTom4fIwExBFAe7ORl93d23xIE6m-8bV0I7BVd__trFO0QKIjCzBiW7jOQRVg9nHZMjnkHksCj0vebZc8_e93gK4TNuRcuLkvCTnfibO7UY_yduW3D9wv0_MPI9Bk/s16000/world-cup-2026.png",
+    "prefer_existing_pages_on_refresh": true,
+    "default_match_info_iframe_enabled": false,
+    "default_match_info_iframe_domains": [
+      "90live.yallatvlive.com",
+      "es.footem.in",
+      "worldcup.epicsports.mobi",
+      "worldcup.epicsports.co.in"
+    ],
+    "use_iframe_match_info_widget": false,
+    "fixture_widget_iframe_url": "",
+    "fixture_widget_height": 360,
+    "page_hero_image_url": "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgPOCakFvb2ltZ1dd9CzkCAB8LjMCYJ55i9QW7FmwtBcuIYre8l8KBLpQxML2pTCnxYTom4fIwExBFAe7ORl93d23xIE6m-8bV0I7BVd__trFO0QKIjCzBiW7jOQRVg9nHZMjnkHksCj0vebZc8_e93gK4TNuRcuLkvCTnfibO7UY_yduW3D9wv0_MPI9Bk/s16000/world-cup-2026.png"
   },
   "shared_social": {
     "whatsapp_groups": [
@@ -64,7 +112,7 @@
   "shared_smartlink": {
     "enabled": true,
     "text": "Continue To Live Coverage",
-    "url": "https://throughalivemedication.com/xsz99637k8?key=50b1239907251e7fd3f28875c685fd32"
+    "url": "https://throughalivemedication.com/f6v7mz5uu?key=6e3e7b92815b067da3dce7b1597d953f"
   },
   "scheduler": {
     "data_dir": "data",
@@ -83,6 +131,21 @@
     "loop_interval_seconds": 60,
     "auto_discover_interval_seconds": 1800,
     "source_refresh_interval_seconds": 1800,
+    "portal_precreate_hours_before": 24,
+    "source_discovery_hours_before": 24,
+    "lineup_refresh_enabled": true,
+    "lineup_refresh_interval_minutes": 180,
+    "lineup_active_refresh_interval_minutes": 5,
+    "lineup_refresh_max_sources": 4,
+    "lineup_refresh_timeout_seconds": 10,
+    "source_thumbnail_enabled": false,
+    "source_thumbnail_max_sources": 3,
+    "source_thumbnail_timeout_seconds": 10,
+    "blocked_thumbnail_source_domains": [
+      "rd9sports.online",
+      "rd9sports.pro",
+      "rd9.riddlearena.com"
+    ],
     "max_sources_per_match": 8,
     "auto_discover_portals": [
       "https://www.rd9sports.online/?m=1",

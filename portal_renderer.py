@@ -60,6 +60,215 @@ def split_teams(match_name):
     return team1, team2
 
 
+TEAM_DISPLAY_ALIASES = {
+    "usa": "USA",
+    "uae": "UAE",
+    "uk": "UK",
+    "psg": "PSG",
+    "lsg": "LSG",
+    "rr": "RR",
+    "rcb": "RCB",
+    "csk": "CSK",
+    "mi": "MI",
+    "kkr": "KKR",
+}
+
+TEAM_FULL_NAME_ALIASES = {
+    "aus": "Australia",
+    "austrlia": "Australia",
+    "asutrlia": "Australia",
+    "australia": "Australia",
+    "bra": "Brazil",
+    "brazil": "Brazil",
+    "hai": "Haiti",
+    "haiti": "Haiti",
+    "mor": "Morocco",
+    "moroco": "Morocco",
+    "morocco": "Morocco",
+    "qat": "Qatar",
+    "qater": "Qatar",
+    "qatar": "Qatar",
+    "sco": "Scotland",
+    "scot": "Scotland",
+    "scotland": "Scotland",
+    "swi": "Switzerland",
+    "swiss": "Switzerland",
+    "switz": "Switzerland",
+    "switzerland": "Switzerland",
+    "tur": "Turkey",
+    "turk": "Turkey",
+    "turkey": "Turkey",
+    "turkiye": "Turkey",
+    "mex": "Mexico",
+    "mexico": "Mexico",
+    "sou": "South Africa",
+    "south africa": "South Africa",
+    "southafrica": "South Africa",
+    "usa": "USA",
+}
+
+DEFAULT_TEAM_TITLE_CODES = {
+    "arsenal": "ARS",
+    "argentina": "ARGENTINA",
+    "australia": "AUS",
+    "aus": "AUS",
+    "barcelona": "FCB",
+    "bel": "BEL",
+    "belgium": "BEL",
+    "bra": "BRAZIL",
+    "brazil": "BRAZIL",
+    "chelsea": "CHE",
+    "england": "ENG",
+    "esp": "ESP",
+    "france": "FRA",
+    "germany": "GER",
+    "haiti": "HAI",
+    "hai": "HAI",
+    "juventus": "JUV",
+    "liverpool": "LFC",
+    "manchester city": "MNC",
+    "man city": "MNC",
+    "manchester united": "MNU",
+    "man united": "MNU",
+    "morocco": "MOR",
+    "mor": "MOR",
+    "netherlands": "NED",
+    "ned": "NED",
+    "paraguay": "PAR",
+    "para": "PAR",
+    "par": "PAR",
+    "portugal": "PORTUGAL",
+    "psg": "PSG",
+    "qatar": "QAT",
+    "qater": "QAT",
+    "qat": "QAT",
+    "real madrid": "RMA",
+    "scotland": "SCO",
+    "scot": "SCO",
+    "sco": "SCO",
+    "switzerland": "SWISS",
+    "swiss": "SWISS",
+    "switz": "SWISS",
+    "swi": "SWISS",
+    "spain": "ESP",
+    "tottenham": "TOT",
+    "tottenham hotspur": "TOT",
+    "turk": "TUR",
+    "turkey": "TUR",
+    "turkiye": "TUR",
+    "uruguay": "URU",
+}
+
+
+def normalize_team_key(value):
+    words = re.findall(r"[a-z0-9]+", str(value or "").lower())
+    return " ".join(words).strip()
+
+
+def display_team_name(value):
+    key = normalize_team_key(value)
+    if key in TEAM_FULL_NAME_ALIASES:
+        return TEAM_FULL_NAME_ALIASES[key]
+    words = []
+    for raw in re.findall(r"[A-Za-z0-9]+", str(value or "")):
+        alias = TEAM_DISPLAY_ALIASES.get(raw.lower())
+        if alias:
+            words.append(alias)
+        elif raw.isupper() and len(raw) <= 4:
+            words.append(raw)
+        else:
+            words.append(raw[:1].upper() + raw[1:])
+    return " ".join(words).strip() or str(value or "").strip()
+
+
+def list_config_values(*values):
+    result = []
+    for value in values:
+        if isinstance(value, list):
+            result.extend(value)
+        elif isinstance(value, str) and value.strip():
+            result.append(value)
+    return result
+
+
+def get_prominent_team(config, match):
+    config = config or {}
+    team1, team2 = split_teams(match.get("match_name", ""))
+    teams = [team1, team2]
+    team_by_key = {normalize_team_key(team): team for team in teams if normalize_team_key(team)}
+
+    explicit = normalize_info_value(
+        match.get("prominent_team") or match.get("featured_team") or match.get("title_team")
+    )
+    explicit_key = normalize_team_key(explicit)
+    if explicit_key in team_by_key:
+        return display_team_name(team_by_key[explicit_key])
+    if explicit:
+        return display_team_name(explicit)
+
+    page_url_team = prominent_team_from_page_url(match)
+    if page_url_team:
+        return display_team_name(page_url_team)
+
+    priority = list_config_values(
+        config.get("prominent_team_priority"),
+        config.get("title_priority_teams"),
+        config.get("priority_teams"),
+    )
+    for item in priority:
+        priority_key = normalize_team_key(item)
+        if priority_key in team_by_key:
+            return display_team_name(team_by_key[priority_key])
+
+    return display_team_name(team1)
+
+
+def prominent_team_from_page_url(match):
+    url = str(match.get("new_blogger_page_url") or "").strip()
+    if not url:
+        return ""
+    stem = url.rsplit("/", 1)[-1]
+    stem = re.sub(r"\.html?$", "", stem, flags=re.IGNORECASE)
+    stem = re.sub(r"[-_]+", " ", stem)
+    stem = re.sub(r"\s+", " ", stem).strip()
+    match_vs = re.search(r"(.+?)\bvs\b.+", stem, flags=re.IGNORECASE)
+    if match_vs:
+        team = match_vs.group(1)
+    else:
+        team = stem
+    team = re.sub(r"\b(?:live|streaming|stream|links|info|watch|free|online|hd)\b", " ", team, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", team).strip()
+
+
+def get_team_title_code(config, team):
+    config = config or {}
+    code_map = dict(DEFAULT_TEAM_TITLE_CODES)
+    for source in (
+        config.get("team_title_codes"),
+        config.get("page_title_team_codes"),
+        config.get("title_team_codes"),
+    ):
+        if isinstance(source, dict):
+            for key, value in source.items():
+                code = str(value or "").strip().upper()
+                if code:
+                    code_map[normalize_team_key(key)] = code
+
+    key = normalize_team_key(team)
+    if key in code_map:
+        return code_map[key]
+
+    display = display_team_name(team)
+    compact = re.sub(r"[^A-Za-z0-9]", "", display)
+    if display.isupper() and 2 <= len(compact) <= 5:
+        return compact
+    parts = re.findall(r"[A-Za-z0-9]+", display)
+    if len(parts) == 1 and len(parts[0]) <= 10:
+        return parts[0].upper()
+    acronym = "".join(part[0].upper() for part in parts if part)
+    return acronym[:4] or compact.upper() or "MATCH"
+
+
 def parse_match_time(value):
     value = str(value or "").strip()
     if value.endswith("Z"):
@@ -121,13 +330,20 @@ def get_channel_info(match, config=None):
 
 
 def get_match_context(config, match):
-    match_name = match.get("match_name", "Live Match")
-    team1, team2 = split_teams(match_name)
-    safe_name = slugify_match_name(match_name)
+    raw_match_name = match.get("match_name", "Live Match")
+    raw_team1, raw_team2 = split_teams(raw_match_name)
+    team1 = display_team_name(raw_team1)
+    team2 = display_team_name(raw_team2)
+    match_name = f"{team1} vs {team2}"
+    safe_name = slugify_match_name(raw_match_name)
+    explicit_thumbnail = normalize_info_value(match.get("thumbnail_url"))
+    feed_thumbnail = normalize_info_value(match.get("feed_thumbnail_url"))
     image_base = (config.get("image_base_url") or "").rstrip("/")
-    thumbnail_url = f"{image_base}/thumb_{safe_name}.jpg" if image_base else ""
+    thumbnail_url = explicit_thumbnail or (f"{image_base}/thumb_{safe_name}.jpg" if image_base else "")
+    structured_image_url = feed_thumbnail or (thumbnail_url if thumbnail_url.startswith("http") else "")
     return {
         "match_name": match_name,
+        "raw_match_name": raw_match_name,
         "team1": team1,
         "team2": team2,
         "safe_name": safe_name,
@@ -138,18 +354,55 @@ def get_match_context(config, match):
         "quality": get_first_info(match, ["quality", "stream_quality"], config.get("default_quality", "HD / Auto Quality")),
         "channels": get_channel_info(match, config),
         "thumbnail_url": thumbnail_url,
+        "feed_thumbnail_url": feed_thumbnail,
+        "structured_image_url": structured_image_url,
         "page_url": match.get("new_blogger_page_url") or "#"
     }
 
 
-def preview_post_title(match):
-    ctx = get_match_context({}, match)
-    return f"{ctx['team1']} vs {ctx['team2']} Live Stream, Preview, Kickoff Time & Channel Info"
+def get_match_genre(match, config=None):
+    config = config or {}
+    genre = get_first_info(
+        match,
+        ["match_genre", "genre", "league", "competition", "tournament"],
+        config.get("default_match_genre") or config.get("default_league", "")
+    )
+    if normalize_team_key(genre) in ("", "live sports"):
+        return ""
+    return genre
 
 
-def streaming_page_title(match):
-    ctx = get_match_context({}, match)
-    return f"{ctx['team1']} vs {ctx['team2']} Live Streaming Links"
+def preview_post_title(match, config=None):
+    ctx = get_match_context(config or {}, match)
+    genre = get_match_genre(match, config or {})
+    genre_part = f" {genre}" if genre else ""
+    return f"{ctx['team1']} vs {ctx['team2']}{genre_part} Match Preview & Kickoff Time"
+
+
+def streaming_page_title(match, config=None):
+    team = get_prominent_team(config or {}, match)
+    team_code = get_team_title_code(config or {}, team)
+    title_format = (config or {}).get("streaming_page_title_format") or "{team_code} INFO"
+    return (
+        str(title_format)
+        .replace("{team}", team)
+        .replace("{team_code}", team_code)
+        .strip()
+        or f"{team_code} INFO"
+    )
+
+
+def streaming_page_url_seed_title(match, config=None):
+    team1, team2 = split_teams(match.get("match_name", ""))
+    title_format = (config or {}).get("streaming_page_url_seed_format") or "{team1} vs {team2} Live Streaming"
+    return (
+        str(title_format)
+        .replace("{team1}", display_team_name(team1))
+        .replace("{team2}", display_team_name(team2))
+        .replace("{match}", display_team_name(match.get("match_name", "")))
+        .strip()
+        or f"{display_team_name(team1)} vs {display_team_name(team2)} Live Streaming"
+    )
 
 
 def ad_top(config):
@@ -195,20 +448,33 @@ def render_smartlink_button(config):
 """
 
 
+def render_square_ad(config):
+    ad_html = ad_top(config)
+    if not ad_html:
+        return ""
+    return f"""
+  <div style="text-align:center; margin:18px auto 10px; min-height:260px;">
+    <div style="display:inline-block; width:300px; max-width:100%; min-height:250px; overflow:hidden;">
+      {ad_html}
+    </div>
+  </div>
+"""
+
+
 def render_social_block(config):
     whatsapp_groups = config.get("whatsapp_groups") or []
     telegram_channels = config.get("telegram_channels") or []
     target = config.get("social_click_target") or "_blank"
     buttons = []
     if whatsapp_groups:
-        buttons.append('<button type="button" onclick="openPortalSocialGroup(\'wa\')" style="display:inline-block; min-width:220px; background:#075E54; color:#ffffff; border:0; cursor:pointer; padding:12px 18px; border-radius:5px; font-weight:700; font-size:14px; letter-spacing:1px; text-transform:uppercase;">Join WhatsApp Group</button>')
+        buttons.append('<button type="button" onclick="openPortalSocialGroup(\'wa\')" style="display:inline-block; min-width:220px; background:linear-gradient(135deg,#00c853,#075E54); color:#ffffff; border:2px solid #ffffff; cursor:pointer; padding:12px 18px; border-radius:6px; font-weight:900; font-size:14px; letter-spacing:1px; text-transform:uppercase; animation:gfsButtonPulse 1.7s infinite;">Join WhatsApp Group</button>')
     if telegram_channels:
-        buttons.append('<button type="button" onclick="openPortalSocialGroup(\'tg\')" style="display:inline-block; min-width:220px; background:#0088cc; color:#ffffff; border:0; cursor:pointer; padding:12px 18px; border-radius:5px; font-weight:700; font-size:14px; letter-spacing:1px; text-transform:uppercase;">Join Telegram Channel</button>')
+        buttons.append('<button type="button" onclick="openPortalSocialGroup(\'tg\')" style="display:inline-block; min-width:220px; background:linear-gradient(135deg,#00b0ff,#004dff); color:#ffffff; border:2px solid #ffffff; cursor:pointer; padding:12px 18px; border-radius:6px; font-weight:900; font-size:14px; letter-spacing:1px; text-transform:uppercase; animation:gfsButtonPulse 1.9s infinite;">Join Telegram Channel</button>')
 
     random_btn_text = config.get("random_btn_text")
     random_btn_url = config.get("random_btn_url")
     if random_btn_text and random_btn_url:
-        buttons.append(f'<a href="{escape(str(random_btn_url), quote=True)}" target="_blank" rel="noopener" style="display:inline-block; min-width:220px; background:#107821; color:#ffffff; text-decoration:none; padding:12px 18px; border-radius:5px; font-weight:700; font-size:14px; letter-spacing:1px; text-transform:uppercase;">{escape(str(random_btn_text))}</a>')
+        buttons.append(f'<a href="{escape(str(random_btn_url), quote=True)}" target="_blank" rel="noopener" style="display:inline-block; min-width:220px; background:linear-gradient(135deg,#ff1744,#ffb300); color:#ffffff; text-decoration:none; padding:12px 18px; border-radius:6px; border:2px solid #ffffff; font-weight:900; font-size:14px; letter-spacing:1px; text-transform:uppercase; animation:gfsButtonPulse 1.6s infinite;">{escape(str(random_btn_text))}</a>')
 
     if not buttons:
         return "", ""
@@ -236,32 +502,34 @@ def render_social_block(config):
 def table_row(label, value):
     return f"""
       <tr style="border:0; height:50px; margin:1px; padding:0; vertical-align:middle;">
-        <td style="border:1pt solid black; height:50px; padding:6px; vertical-align:middle; font-weight:bold; width:50%;">{escape(str(label))}</td>
-        <td style="border:1pt solid black; height:50px; padding:6px; vertical-align:middle; width:50%;">{escape(str(value))}</td>
+        <td style="border:1px solid #000000; height:50px; padding:6px; vertical-align:middle; font-weight:bold; width:50%;">{escape(str(label))}</td>
+        <td style="border:1px solid #000000; height:50px; padding:6px; vertical-align:middle; width:50%;">{escape(str(value))}</td>
       </tr>
 """
 
 
-def render_match_table(ctx):
+def render_match_table(ctx, include_channels=True, include_quality=True):
+    channel_row = table_row("CHANNELS", ctx["channels"]) if include_channels else ""
+    quality_row = table_row("QUALITY", ctx["quality"]) if include_quality else ""
     return f"""
-  <table border="0" cellpadding="0" cellspacing="0" style="background-color:white; border-collapse:collapse; border-spacing:0; border:0.8pt solid #000000; color:black; line-height:1.5; margin:0 0 1.25rem; padding:0; text-align:center; vertical-align:baseline; width:100%;">
+  <table border="0" cellpadding="0" cellspacing="0" style="background-color:white; border-collapse:collapse; border-spacing:0; border:1px solid #000000; color:black; line-height:1.5; margin:0 0 1.25rem; padding:0; text-align:center; vertical-align:baseline; width:100%;">
     <tbody style="border:0; margin:0; padding:0; vertical-align:baseline;">
       <tr style="border:0; height:50px; margin:0; padding:0; vertical-align:middle;">
-        <td colspan="2" style="background:#006600; border:0.7pt solid black; height:50px; padding:4px; vertical-align:middle; width:100%;">
+        <td colspan="2" style="background:#006600; border:1px solid #000000; height:50px; padding:4px; vertical-align:middle; width:100%;">
           <span style="color:white; font-size:large; font-weight:bold; text-transform:uppercase;">{escape(ctx["team1"])} vs {escape(ctx["team2"])}</span>
         </td>
       </tr>
       <tr style="background:#000000; border:0; height:50px; margin:1px; padding:0; vertical-align:middle;">
-        <td style="border:1pt solid black; height:50px; padding:4px; vertical-align:middle; width:50%;"><span style="color:white; font-weight:bold;">MATCH</span></td>
-        <td style="border:1pt solid black; height:50px; padding:4px; vertical-align:middle; width:50%;"><span style="color:white; font-weight:bold;">SCHEDULE</span></td>
+        <td style="border:1px solid #000000; height:50px; padding:4px; vertical-align:middle; width:50%;"><span style="color:white; font-weight:bold;">MATCH</span></td>
+        <td style="border:1px solid #000000; height:50px; padding:4px; vertical-align:middle; width:50%;"><span style="color:white; font-weight:bold;">SCHEDULE</span></td>
       </tr>
       {table_row("MATCH", f"{ctx['team1']} vs {ctx['team2']}")}
       {table_row("DATE", ctx["date"])}
       {table_row("TIME", ctx["time"])}
       {table_row("VENUE", ctx["venue"])}
       {table_row("LEAGUE", ctx["league"])}
-      {table_row("CHANNELS", ctx["channels"])}
-      {table_row("QUALITY", ctx["quality"])}
+      {channel_row}
+      {quality_row}
     </tbody>
   </table>
 """
@@ -276,11 +544,71 @@ def render_channel_section(ctx):
 """
 
 
+def default_channel_rows(ctx):
+    update_text = "Updated 15 minutes prior to the match."
+    rows = [
+        ("Worldwide", update_text),
+        ("United States", "FOX / FS1 / FuboTV, subject to fixture listing."),
+        ("United Kingdom", "BBC / ITV, subject to fixture listing."),
+        ("Canada", "TSN / CTV, subject to fixture listing."),
+        ("Australia", "SBS / SBS On Demand, subject to fixture listing."),
+        ("India", update_text),
+    ]
+    for team in (ctx["team1"], ctx["team2"]):
+        if team and not any(normalize_team_key(team) == normalize_team_key(row[0]) for row in rows):
+            rows.append((team, update_text))
+    return rows
+
+
+def configured_channel_rows(match, config, ctx):
+    values = (
+        match.get("channels_by_country")
+        or match.get("channel_by_country")
+        or match.get("broadcast_by_country")
+        or match.get("tv_channels_by_country")
+        or config.get("default_channels_by_country")
+    )
+    rows = []
+    if isinstance(values, dict):
+        rows.extend((str(country), normalize_info_value(channel)) for country, channel in values.items())
+    elif isinstance(values, list):
+        for item in values:
+            if isinstance(item, dict):
+                country = item.get("country") or item.get("region") or item.get("name")
+                channel = item.get("channel") or item.get("channels") or item.get("value") or item.get("info")
+                if country and channel:
+                    rows.append((str(country), normalize_info_value(channel)))
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                rows.append((str(item[0]), normalize_info_value(item[1])))
+    return [(country, channel) for country, channel in rows if country and channel] or default_channel_rows(ctx)
+
+
+def render_channel_country_table(ctx, match, config):
+    rows = configured_channel_rows(match, config, ctx)
+    row_html = "".join(table_row(country, channel) for country, channel in rows)
+    return f"""
+  <table border="0" cellpadding="0" cellspacing="0" style="background-color:white; border-collapse:collapse; border-spacing:0; border:1px solid #000000; color:black; line-height:1.5; margin:0; padding:0; text-align:center; vertical-align:baseline; width:100%;">
+    <tbody style="border:0; margin:0; padding:0; vertical-align:baseline;">
+      <tr style="border:0; height:50px; margin:0; padding:0; vertical-align:middle;">
+        <td colspan="2" style="background:#006600; border:1px solid #000000; height:50px; padding:4px; vertical-align:middle; width:100%;">
+          <span style="color:white; font-size:large; font-weight:bold; text-transform:uppercase;">{escape(ctx["team1"])} vs {escape(ctx["team2"])} CHANNEL INFO</span>
+        </td>
+      </tr>
+      <tr style="background:#000000; border:0; height:50px; margin:1px; padding:0; vertical-align:middle;">
+        <td style="border:1px solid #000000; height:50px; padding:4px; vertical-align:middle; width:50%;"><span style="color:white; font-weight:bold;">COUNTRY / REGION</span></td>
+        <td style="border:1px solid #000000; height:50px; padding:4px; vertical-align:middle; width:50%;"><span style="color:white; font-weight:bold;">CHANNEL INFO</span></td>
+      </tr>
+      {row_html}
+    </tbody>
+  </table>
+"""
+
+
 def render_countdown(match, safe_name):
     match_time = escape(str(match.get("match_time", "")), quote=True)
     return f"""
   <div style="background:#f7f9fa; border:1px solid #e1e8ed; border-radius:6px; padding:15px; text-align:center; margin:18px 0 24px;">
-    <div style="font-size:11px; text-transform:uppercase; color:#555555; letter-spacing:1.5px; margin-bottom:8px; font-weight:bold;">Live stream starts in</div>
+    <div style="font-size:11px; text-transform:uppercase; color:#555555; letter-spacing:1.5px; margin-bottom:8px; font-weight:bold;">Match coverage starts in</div>
     <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
       <div style="min-width:55px;"><span id="days-{safe_name}" style="font-size:22px; font-weight:bold; color:#006600;">00</span><div style="font-size:9px; text-transform:uppercase; color:#777777;">Days</div></div>
       <div style="min-width:55px;"><span id="hours-{safe_name}" style="font-size:22px; font-weight:bold; color:#006600;">00</span><div style="font-size:9px; text-transform:uppercase; color:#777777;">Hrs</div></div>
@@ -334,6 +662,230 @@ def build_widget_url(config, match):
     return f"{base}{sep}{query}" if query else base
 
 
+def is_usable_widget_url(value):
+    value = str(value or "").strip()
+    if not value:
+        return False
+    lowered = value.lower()
+    if "yourdomain.com" in lowered or lowered.startswith(("widget.html", "./widget.html")):
+        return False
+    return lowered.startswith(("http://", "https://"))
+
+
+def match_source_urls(match):
+    value = match.get("source_url") or match.get("source_urls") or []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(url).strip() for url in value if str(url).strip()]
+    return []
+
+
+def default_match_info_iframe_url(config, match):
+    if not config.get("default_match_info_iframe_enabled", False):
+        return ""
+    preferred_domains = config.get("default_match_info_iframe_domains") or [
+        "90live.yallatvlive.com",
+        "es.footem.in",
+        "worldcup.epicsports.mobi",
+        "worldcup.epicsports.co.in",
+        "www.epicsports.in",
+        "epicsports.in",
+    ]
+    blocked_markers = config.get("default_match_info_iframe_blocked_markers") or [
+        "rd9sports",
+        "riddlearena",
+    ]
+    sources = match_source_urls(match)
+
+    def score_url(url):
+        lowered = url.lower()
+        if any(marker in lowered for marker in blocked_markers):
+            return None
+        score = 100
+        for idx, domain in enumerate(preferred_domains):
+            if domain.lower() in lowered:
+                score = min(score, idx * 10)
+        if "live-score-preview" in lowered:
+            score -= 8
+        elif "preview" in lowered:
+            score -= 4
+        return score
+
+    scored = [(score_url(url), url) for url in sources if is_usable_widget_url(url)]
+    scored = [(score, url) for score, url in scored if score is not None]
+    if not scored:
+        return ""
+    return sorted(scored, key=lambda item: (item[0], item[1]))[0][1]
+
+
+def replace_widget_placeholders(template, ctx, match, url_encode=False):
+    values = {
+        "match": ctx["match_name"],
+        "team1": ctx["team1"],
+        "team2": ctx["team2"],
+        "kickoff": match.get("match_time", ""),
+        "date": ctx["date"],
+        "time": ctx["time"],
+        "page_url": ctx["page_url"],
+        "channel": ctx["channels"],
+        "league": ctx["league"],
+    }
+    rendered = str(template or "")
+    for key, value in values.items():
+        replacement = quote(str(value)) if url_encode else str(value)
+        rendered = rendered.replace("{" + key + "}", replacement)
+    return rendered
+
+
+def render_fixture_table_widget(config, match, ctx, state="upcoming"):
+    fixture_id = re.sub(r"[^a-z0-9_-]+", "-", ctx["safe_name"].lower()).strip("-") or "match"
+    initial_status = {
+        "upcoming": "NS",
+        "preparing": "NS",
+        "live": "STARTED",
+        "ended": "FT",
+    }.get(state, "NS")
+    kickoff = escape(str(match.get("match_time", "")), quote=True)
+    return f"""
+  <table border="0" cellpadding="0" cellspacing="0" style="background:#ffffff; border-collapse:separate; border-spacing:0; border:1px solid #111111; color:#111111; margin:14px 0; overflow:hidden; text-align:center; width:100%; box-shadow:0 6px 18px rgba(0,0,0,.10);">
+    <tbody>
+      <tr>
+        <td colspan="3" style="background:#006600; border:1px solid #111111; color:#ffffff; font-size:17px; font-weight:900; padding:12px 10px; text-transform:uppercase;">Match Fixture</td>
+      </tr>
+      <tr style="background:#111111; color:#ffffff; height:40px; text-transform:uppercase;">
+        <td style="border:1px solid #111111; padding:8px; width:34%; font-weight:800;">Home</td>
+        <td style="border:1px solid #111111; padding:8px; width:32%; font-weight:800;">Kickoff</td>
+        <td style="border:1px solid #111111; padding:8px; width:34%; font-weight:800;">Away</td>
+      </tr>
+      <tr>
+        <td style="background:#fafafa; border:1px solid #d6d6d6; padding:18px 10px; vertical-align:middle;">
+          <div style="font-size:18px; font-weight:900; line-height:1.25; text-transform:uppercase;">{escape(ctx["team1"])}</div>
+          <div style="color:#666666; font-size:12px; font-weight:800; margin-top:5px; text-transform:uppercase;">Home</div>
+        </td>
+        <td style="background:#ffffff; border:1px solid #d6d6d6; padding:13px 8px; vertical-align:middle;">
+          <span id="fixture-status-{fixture_id}" style="display:inline-block; background:#f4c430; border:1px solid #111111; border-radius:4px; color:#111111; min-width:64px; padding:7px 9px; font-size:12px; font-weight:900; margin-bottom:8px;">{escape(initial_status)}</span>
+          <div style="color:#006600; font-size:11px; font-weight:900; letter-spacing:.8px; margin:0 0 7px; text-transform:uppercase;">Kickoff Counter</div>
+          <div id="fixture-counter-{fixture_id}" style="display:flex; gap:5px; justify-content:center; flex-wrap:wrap;">
+            <span style="background:#111111; color:#ffffff; display:inline-block; min-width:42px; padding:7px 4px; font-size:12px; font-weight:900;">00d</span>
+            <span style="background:#111111; color:#ffffff; display:inline-block; min-width:42px; padding:7px 4px; font-size:12px; font-weight:900;">00h</span>
+            <span style="background:#111111; color:#ffffff; display:inline-block; min-width:42px; padding:7px 4px; font-size:12px; font-weight:900;">00m</span>
+            <span style="background:#111111; color:#ffffff; display:inline-block; min-width:42px; padding:7px 4px; font-size:12px; font-weight:900;">00s</span>
+          </div>
+          <div style="color:#333333; font-size:12px; font-weight:900; margin-top:8px;">{escape(ctx["time"])}</div>
+        </td>
+        <td style="background:#fafafa; border:1px solid #d6d6d6; padding:18px 10px; vertical-align:middle;">
+          <div style="font-size:18px; font-weight:900; line-height:1.25; text-transform:uppercase;">{escape(ctx["team2"])}</div>
+          <div style="color:#666666; font-size:12px; font-weight:800; margin-top:5px; text-transform:uppercase;">Away</div>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="3" style="border:1px solid #d6d6d6; padding:11px; color:#333333; font-size:13px; font-weight:800; text-transform:uppercase;">{escape(ctx["date"])} | {escape(ctx["league"])}</td>
+      </tr>
+    </tbody>
+  </table>
+  <script type="text/javascript">
+  (function() {{
+    var kickoff = new Date("{kickoff}").getTime();
+    var counter = document.getElementById("fixture-counter-{fixture_id}");
+    var status = document.getElementById("fixture-status-{fixture_id}");
+    var ended = "{escape(state, quote=True)}" === "ended";
+    function pad(value) {{ return String(value).padStart(2, "0"); }}
+    function box(value) {{
+      return '<span style="background:#111111; color:#ffffff; display:inline-block; min-width:42px; padding:7px 4px; font-size:12px; font-weight:900;">' + value + '</span>';
+    }}
+    function tick() {{
+      if (!counter || !kickoff || isNaN(kickoff)) return;
+      if (ended) {{
+        counter.innerHTML = box("FT");
+        if (status) status.textContent = "FT";
+        return;
+      }}
+      var diff = kickoff - Date.now();
+      if (diff <= 0) {{
+        counter.innerHTML = box("STARTED");
+        if (status) status.textContent = "STARTED";
+        return;
+      }}
+      var days = Math.floor(diff / 86400000);
+      var hours = Math.floor((diff % 86400000) / 3600000);
+      var mins = Math.floor((diff % 3600000) / 60000);
+      var secs = Math.floor((diff % 60000) / 1000);
+      counter.innerHTML = box(pad(days) + "d") + box(pad(hours) + "h") + box(pad(mins) + "m") + box(pad(secs) + "s");
+    }}
+    tick();
+    setInterval(tick, 1000);
+  }})();
+  </script>
+"""
+
+
+def render_external_match_widget(config, match, ctx, state="upcoming"):
+    widget_html = normalize_info_value(
+        match.get("match_info_widget_html")
+        or match.get("live_score_widget_html")
+        or config.get("match_info_widget_html")
+        or config.get("live_score_widget_html")
+    )
+    if widget_html:
+        return f"""
+  <div style="background:#ffffff; border:1px solid #d8e4d8; border-radius:6px; overflow:auto; padding:8px; margin:14px 0;">
+    {replace_widget_placeholders(widget_html, ctx, match)}
+  </div>
+"""
+
+    fixture_iframe_url = normalize_info_value(
+        match.get("fixture_widget_iframe_url")
+        or config.get("fixture_widget_iframe_url")
+    )
+    if fixture_iframe_url:
+        height = int(match.get("fixture_widget_height") or config.get("fixture_widget_height") or 360)
+        iframe_src = replace_widget_placeholders(fixture_iframe_url, ctx, match, url_encode=True)
+        return f"""
+  <div style="background:#ffffff; border:1px solid #000000; overflow:hidden; margin:14px 0;">
+    <iframe src="{escape(iframe_src, quote=True)}" width="100%" height="{height}" frameborder="0" loading="lazy" style="display:block; background:#ffffff; border:0; width:100%;"></iframe>
+  </div>
+"""
+
+    if config.get("use_iframe_match_info_widget", False):
+        iframe_url = normalize_info_value(
+            match.get("match_info_widget_iframe_url")
+            or match.get("live_score_widget_iframe_url")
+            or config.get("match_info_widget_iframe_url")
+            or config.get("live_score_widget_iframe_url")
+        )
+        if iframe_url:
+            height = int(config.get("match_info_widget_height") or match.get("match_info_widget_height") or 520)
+            iframe_src = replace_widget_placeholders(iframe_url, ctx, match, url_encode=True)
+            return f"""
+  <div style="background:#000000; border:1px solid #cccccc; border-radius:6px; overflow:hidden; margin:14px 0;">
+    <iframe src="{escape(iframe_src, quote=True)}" width="100%" height="{height}" frameborder="0" loading="lazy" allowfullscreen style="display:block; background:#000000; border:0; width:100%;"></iframe>
+  </div>
+"""
+
+    return render_fixture_table_widget(config, match, ctx, state)
+
+
+def render_match_info_panel(config, match, ctx, state):
+    external_widget = render_external_match_widget(config, match, ctx, state)
+    countdown = "" if external_widget or state == "ended" else render_countdown(match, ctx["safe_name"])
+    if external_widget:
+        intro = "Match fixture and kickoff counter are shown below. Streaming links are added close to kickoff."
+    else:
+        intro = "Streaming links will be updated 15 minutes prior to the match. Keep this page open and refresh near kickoff."
+    return f"""
+  <div style="border:1px solid #d8e4d8; background:#f8fff8; padding:14px; margin:12px 0; border-radius:6px;">
+    <div style="font-weight:800; color:#006600; text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px;">Broadcast Channel Info</div>
+    <div style="color:#222222; line-height:1.6;">{escape(ctx["channels"])}</div>
+  </div>
+  <div style="border:1px solid #e1e8ed; background:#ffffff; padding:12px; margin:12px 0; border-radius:6px;">
+    <div style="font-size:13px; color:#333333; line-height:1.6; margin-bottom:8px;">{escape(intro)}</div>
+    {external_widget}
+    {countdown}
+  </div>
+"""
+
+
 def render_structured_data(ctx, match, state="upcoming"):
     event_status = "https://schema.org/EventScheduled"
     if state == "live":
@@ -347,74 +899,200 @@ def render_structured_data(ctx, match, state="upcoming"):
         "startDate": match.get("match_time"),
         "eventStatus": event_status,
         "eventAttendanceMode": "https://schema.org/OnlineEventAttendanceMode",
-        "description": f"{ctx['match_name']} live stream, kickoff time, channel info and match preview.",
+        "description": f"{ctx['match_name']} match preview, kickoff time, channel info and coverage updates.",
         "competitor": [{"@type": "SportsTeam", "name": ctx["team1"]}, {"@type": "SportsTeam", "name": ctx["team2"]}]
     }
     if ctx["venue"] != "TBA":
         data["location"] = {"@type": "Place", "name": ctx["venue"]}
-    if ctx["thumbnail_url"]:
-        data["image"] = [ctx["thumbnail_url"]]
+    if ctx["structured_image_url"]:
+        data["image"] = [ctx["structured_image_url"]]
     return '<script type="application/ld+json">' + json.dumps(data, ensure_ascii=False) + "</script>"
 
 
-def render_portal_shell(config, match, inner_html, state="upcoming"):
+def render_portal_shell(config, match, inner_html, state="upcoming", hero_html=""):
     ctx = get_match_context(config, match)
     social_html, social_script = render_social_block(config)
+    social_row = portal_row(social_html, padding="12px") if social_html else ""
     return f"""
-<div style="font-family: Ubuntu, Poppins, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width:760px; margin:12px auto; padding:12px; background:#ffffff; color:#222222; box-sizing:border-box;">
-  <div style="text-align:center; margin:4px 0 14px;">{render_status_pill(state)}</div>
+{hero_html}
+<table border="0" cellpadding="0" cellspacing="0" style="font-family:Ubuntu, Poppins, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background:#ffffff; border-collapse:collapse; border:1px solid #000000; color:#222222; margin:12px auto; max-width:760px; width:100%; box-sizing:border-box;">
+  <tbody>
   {inner_html}
-  {social_html}
-  <div style="margin:18px 0; text-align:center;">{ad_bottom(config)}</div>
-</div>
+  {social_row}
+  </tbody>
+</table>
+{ad_bottom(config)}
 {social_script}
+<style type="text/css">
+@keyframes gfsButtonPulse {{
+  0% {{ transform:translateY(0) scale(1); box-shadow:0 0 0 0 rgba(255, 203, 0, .65); }}
+  50% {{ transform:translateY(-1px) scale(1.015); box-shadow:0 0 0 9px rgba(255, 203, 0, 0); }}
+  100% {{ transform:translateY(0) scale(1); box-shadow:0 0 0 0 rgba(255, 203, 0, 0); }}
+}}
+</style>
 {render_structured_data(ctx, match, state)}
 """
 
 
-def render_preview_post(config, match):
-    ctx = get_match_context(config, match)
-    image_html = ""
-    if ctx["thumbnail_url"]:
-        image_html = f"""
-  <div style="text-align:center; margin-bottom:16px;">
-    <img src="{escape(ctx["thumbnail_url"], quote=True)}" alt="{escape(ctx["match_name"], quote=True)} live stream preview" style="width:100%; max-width:680px; height:auto; border:1px solid #cccccc; border-radius:4px;" />
-  </div>
+def portal_row(content, padding="10px", align="center", bg="#ffffff"):
+    if not content:
+        return ""
+    return f"""
+  <tr>
+    <td style="background:{bg}; border:1px solid #000000; padding:{padding}; text-align:{align}; vertical-align:middle; box-sizing:border-box;">
+      {content}
+    </td>
+  </tr>
 """
-    body = f"""
-  {image_html}
-  <h2 style="font-size:22px; line-height:1.35; color:#111111; margin:6px 0 12px; text-align:center;">{escape(ctx["match_name"])} Live Stream, Preview and Channel Info</h2>
-  <div style="margin:16px 0; text-align:center;">{ad_top(config)}</div>
-  {render_match_table(ctx)}
-  {render_countdown(match, ctx["safe_name"])}
-  <div style="text-align:center; margin:18px 0 24px;">
-    <a href="{escape(ctx["page_url"], quote=True)}" style="display:inline-block; width:100%; max-width:560px; box-sizing:border-box; background:#107821; color:#ffffff; text-decoration:none; padding:14px 18px; border-radius:5px; font-size:16px; font-weight:800; letter-spacing:1px; text-transform:uppercase;">Click Here To Watch Live Stream</a>
-  </div>
-  {render_channel_section(ctx)}
-  <div style="line-height:1.65; font-size:15px; color:#333333; margin:20px 0; border-top:1px solid #eeeeee; padding-top:18px;">
-    <h3 style="color:#111111; font-size:17px; font-weight:bold; margin:0 0 10px; border-left:4px solid #006600; padding-left:8px;">Match Preview</h3>
-    <p style="margin:0 0 12px;">{escape(ctx["team1"])} and {escape(ctx["team2"])} meet in {escape(ctx["league"])} action, with kickoff scheduled for {escape(ctx["date"])} at {escape(ctx["time"])}. This page includes match timing, live stream access, channel information and updated streaming links when coverage begins.</p>
-    <p style="margin:0 0 12px;">The streaming page will activate before kickoff. If the official broadcast or channel details change, this article and the match page can be refreshed from the automation schedule.</p>
-  </div>
-  <table border="0" cellpadding="0" cellspacing="0" style="background-color:white; border-collapse:collapse; border:0.8pt solid #000000; color:black; text-align:center; width:100%; margin:18px 0;">
+
+
+def portal_header_row(text, bg="#006600"):
+    return portal_row(
+        f'<span style="color:#ffffff; font-size:18px; font-weight:800; line-height:1.35; text-transform:uppercase;">{escape(str(text))}</span>',
+        padding="9px",
+        bg=bg,
+    )
+
+
+def portal_text_row(title, paragraphs):
+    content = f"""
+      <div style="color:#111111; font-size:17px; font-weight:800; margin:0 0 8px; text-align:left;">{escape(title)}</div>
+      {''.join(f'<p style="color:#333333; font-size:15px; line-height:1.65; margin:0 0 10px; text-align:left;">{escape(str(paragraph))}</p>' for paragraph in paragraphs)}
+    """
+    return portal_row(content, padding="14px", align="left")
+
+
+def render_lineup_table(ctx, match):
+    lineup = match.get("lineups") if isinstance(match.get("lineups"), dict) else {}
+    status = str(lineup.get("status") or "predicted").lower()
+    header = "CONFIRMED LINEUP" if status == "confirmed" else "PREDICTED LINEUP"
+    text = normalize_info_value(lineup.get("text"))
+    text_html = render_lineup_paragraphs(text)
+    if not text_html:
+        text_html = '<p style="margin:6px 0;"><b>Lineup information will be updated when available.</b></p>'
+    return f"""
+  <table border="0" cellpadding="0" cellspacing="0" style="background-color:white; border-collapse:collapse; border:1px solid #000000; color:black; text-align:center; width:100%; margin:0;">
     <tbody>
-      <tr><td colspan="2" style="background:#006600; border:0.7pt solid black; padding:8px;"><span style="color:white; font-size:medium; font-weight:bold;">PREDICTED LINEUP</span></td></tr>
-      <tr><td colspan="2" style="border:0.7pt solid black; padding:16px; text-align:left;"><b>Coming Soon...</b></td></tr>
-      <tr><td colspan="2" style="background:#006600; border:0.7pt solid black; padding:8px;"><span style="color:white; font-size:medium; font-weight:bold;">SCORE PREDICTION</span></td></tr>
-      <tr><td colspan="2" style="border:0.7pt solid black; padding:12px;"><b>{escape(ctx["team1"])} vs {escape(ctx["team2"])} - Prediction will be updated close to kickoff.</b></td></tr>
+      <tr><td colspan="2" style="background:#006600; border:1px solid #000000; padding:8px;"><span style="color:white; font-size:medium; font-weight:bold;">{header}</span></td></tr>
+      <tr><td colspan="2" style="border:1px solid #000000; padding:14px; text-align:left; line-height:1.65; font-size:14px;">{text_html}</td></tr>
+      <tr><td colspan="2" style="background:#006600; border:1px solid #000000; padding:8px;"><span style="color:white; font-size:medium; font-weight:bold;">SCORE PREDICTION</span></td></tr>
+      <tr><td colspan="2" style="border:1px solid #000000; padding:12px;"><b>{escape(ctx["team1"])} vs {escape(ctx["team2"])} - Prediction will be updated close to kickoff.</b></td></tr>
     </tbody>
   </table>
 """
-    return render_portal_shell(config, match, body, "upcoming")
+
+
+def render_lineup_paragraphs(text):
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    pairs = []
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        lower = line.lower()
+        if lower in ("possible lineups", "predicted lineups", "confirmed lineups", "lineups"):
+            idx += 1
+            continue
+        match = re.match(
+            r"^(.+?)\s+(possible|predicted|probable|confirmed|starting)\s+(?:starting\s+)?line\s*up:?\s*$|^(.+?)\s+(possible|predicted|probable|confirmed|starting)\s+(?:starting\s+)?lineup:?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            team = (match.group(1) or match.group(3) or "").strip()
+            label = re.sub(r"\s+", " ", line).strip()
+            lineup = ""
+            if idx + 1 < len(lines):
+                next_line = lines[idx + 1]
+                if not re.search(r"\b(lineup|line up)\b", next_line, flags=re.IGNORECASE):
+                    lineup = next_line
+                    idx += 1
+            if team and lineup:
+                pairs.append((team, label, lineup))
+            idx += 1
+            continue
+        idx += 1
+
+    if pairs:
+        return "".join(
+            f'<p style="margin:6px 0 12px; line-height:1.65;"><b>{escape(display_team_name(team))}</b><br /><b>{escape(lineup)}</b></p>'
+            for team, _label, lineup in pairs
+        )
+
+    return "".join(
+        f'<p style="margin:6px 0 10px; line-height:1.65;"><b>{escape(line)}</b></p>'
+        for line in lines
+    )
+
+
+def render_preview_post(config, match):
+    ctx = get_match_context(config, match)
+    image_html = render_thumbnail_image(ctx)
+    jump_break = '<a name="more"></a>'
+    hero_html = image_html + f"\n{jump_break}\n" if image_html else f"{jump_break}\n"
+    cta_html = f"""
+    <a href="{escape(ctx["page_url"], quote=True)}" style="display:inline-flex; align-items:center; justify-content:center; width:100%; min-height:62px; max-width:590px; box-sizing:border-box; background:linear-gradient(135deg,#ff1744 0%,#ffb300 48%,#00a86b 100%); color:#ffffff; text-decoration:none; padding:18px 20px; border-radius:6px; border:2px solid #ffffff; font-size:17px; font-weight:900; letter-spacing:1px; text-transform:uppercase; text-shadow:0 1px 2px rgba(0,0,0,.35); animation:gfsButtonPulse 1.45s infinite;">Click Here For Match Info</a>
+"""
+    body = f"""
+  {portal_row(render_match_table(ctx, include_channels=False), padding="0")}
+  {portal_row(render_lineup_table(ctx, match), padding="0")}
+  {portal_text_row("Match Preview", [
+      f"{ctx['team1']} vs {ctx['team2']} is scheduled for {ctx['date']} at {ctx['time']}, and the fixture brings together two sides with very different strengths.",
+      f"{ctx['team1']} will look to control the tempo and create chances through quick attacking phases, while {ctx['team2']} can stay dangerous with compact defending, fast transitions and set-piece pressure.",
+      "The final channel details, countdown status and live coverage buttons are handled on the dedicated match page and are updated close to kickoff."
+  ])}
+  {portal_row(render_square_ad(config), padding="12px")}
+  {portal_header_row("Match Page", bg="#006600")}
+  {portal_row(cta_html, padding="22px 14px")}
+  {portal_row(render_smartlink_button(config), padding="12px")}
+"""
+    return render_portal_shell(config, match, body, "upcoming", hero_html=hero_html)
+
+
+def render_thumbnail_image(ctx):
+    feed_url = ctx.get("feed_thumbnail_url") or ""
+    thumbnail_url = ctx.get("thumbnail_url") or ""
+    if not thumbnail_url and not feed_url:
+        return ""
+    hidden_feed = ""
+    if feed_url and feed_url != thumbnail_url:
+        hidden_feed = f'<img src="{escape(feed_url, quote=True)}" alt="{escape(ctx["match_name"], quote=True)} preview thumbnail" style="display:none !important; width:1px; height:1px; opacity:0;" />'
+    visible = ""
+    if thumbnail_url:
+        visible = f'<img src="{escape(thumbnail_url, quote=True)}" alt="{escape(ctx["match_name"], quote=True)} live stream preview" style="width:100%; max-width:760px; height:auto; border:0; display:block; margin:0 auto;" />'
+    return f"""
+  <div style="text-align:center; margin:12px auto 10px; max-width:760px;">
+    {hidden_feed}
+    {visible}
+  </div>
+"""
+
+
+def render_page_hero_image(config, match, ctx):
+    page_url = normalize_info_value(
+        match.get("page_hero_image_url")
+        or match.get("page_thumbnail_url")
+        or config.get("page_hero_image_url")
+        or config.get("world_cup_page_hero_image_url")
+    )
+    if page_url:
+        page_ctx = dict(ctx, thumbnail_url=page_url, feed_thumbnail_url="")
+        return render_thumbnail_image(page_ctx)
+    return render_thumbnail_image(ctx)
 
 
 def render_streaming_page(config, match, state="upcoming", links_html=""):
     ctx = get_match_context(config, match)
-    widget_url = build_widget_url(config, match)
+    image_html = render_page_hero_image(config, match, ctx)
+    link_notice = f"""
+  <div style="background:#fff7d6; border:2px solid #f4c430; color:#111111; border-radius:6px; padding:13px 14px; margin:0 0 14px; text-align:center; font-weight:900; line-height:1.5; text-transform:uppercase;">
+    {escape(ctx["team1"])} vs {escape(ctx["team2"])} match links are added 15 minutes prior to kickoff.
+  </div>
+"""
     if state == "live" and links_html:
         stream_block = f"""
   <div id="player-frame-container" style="background:#ffffff; border:1px solid #cccccc; border-radius:6px; padding:12px; margin:18px 0; text-align:center;">
     <div style="font-weight:800; color:#006600; text-transform:uppercase; letter-spacing:.7px; margin-bottom:10px;">Live Stream Links</div>
+    <div style="background:#eaffea; border:2px solid #00a651; border-radius:6px; color:#005a20; font-weight:900; margin:0 auto 14px; max-width:620px; padding:12px; text-transform:uppercase;">Match links added. Try Link 1 first, then switch if needed.</div>
     {links_html}
   </div>
 """
@@ -432,18 +1110,32 @@ def render_streaming_page(config, match, state="upcoming", links_html=""):
 """
     else:
         stream_block = f"""
-  <div id="player-frame-container" style="background:#000000; border-radius:6px; overflow:hidden; border:1px solid #cccccc; margin:18px 0;">
-    <iframe src="{escape(widget_url, quote=True)}" width="100%" height="480" frameborder="0" allowfullscreen style="display:block; background:#000000; border:0;"></iframe>
+  <div id="player-frame-container" style="background:#f7f9fa; border:1px solid #e1e8ed; border-radius:6px; padding:20px; margin:18px 0; text-align:center; color:#333333; font-weight:800;">
+    {link_notice}
+    Live streaming links will be updated 15 minutes prior to the match.
   </div>
 """
 
     body = f"""
-  <h2 style="font-size:22px; line-height:1.35; color:#111111; margin:6px 0 10px; text-align:center;">{escape(ctx["match_name"])} Live Streaming Page</h2>
-  <p style="font-size:14px; line-height:1.6; color:#444444; text-align:center; margin:0 0 14px;">Watch page for {escape(ctx["match_name"])} with kickoff time, channel information, live status and stream buttons.</p>
-  <div style="margin:16px 0; text-align:center;">{ad_top(config)}</div>
-  {render_match_table(ctx)}
-  {render_channel_section(ctx)}
-  {stream_block}
-  {render_smartlink_button(config)}
+  {portal_header_row("Match Coverage")}
+  {portal_row(f'<div style="font-size:14px; line-height:1.6; color:#444444;">{escape(ctx["match_name"])} coverage page with broadcast information, live-score widget, countdown and coverage buttons when active.</div>', padding="10px")}
+  {portal_row(render_channel_country_table(ctx, match, config), padding="0")}
+  {portal_header_row("Live Score / Countdown", bg="#006600")}
+  {portal_row(render_match_info_panel(config, match, ctx, state), padding="0")}
+  {portal_row(render_square_ad(config), padding="12px")}
+  {portal_header_row("Streaming Links", bg="#000000")}
+  {portal_row(link_notice + stream_block if state == "live" and links_html else stream_block, padding="12px")}
+  {render_page_lineup_section(ctx, match)}
+  {portal_row(render_smartlink_button(config), padding="12px")}
 """
-    return render_portal_shell(config, match, body, state)
+    return render_portal_shell(config, match, body, state, hero_html=image_html)
+
+
+def render_page_lineup_section(ctx, match):
+    lineup = match.get("lineups") if isinstance(match.get("lineups"), dict) else {}
+    if str(lineup.get("status") or "").lower() != "confirmed":
+        return ""
+    return f"""
+  {portal_header_row("Confirmed Lineup", bg="#006600")}
+  {portal_row(render_lineup_table(ctx, match), padding="0")}
+"""

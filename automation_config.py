@@ -74,6 +74,21 @@ DEFAULT_SCHEDULER_CONFIG = {
     "loop_interval_seconds": 60,
     "auto_discover_interval_seconds": 1800,
     "source_refresh_interval_seconds": 1800,
+    "portal_precreate_hours_before": 24,
+    "source_discovery_hours_before": 24,
+    "lineup_refresh_enabled": True,
+    "lineup_refresh_interval_minutes": 180,
+    "lineup_active_refresh_interval_minutes": 5,
+    "lineup_refresh_max_sources": 4,
+    "lineup_refresh_timeout_seconds": 10,
+    "source_thumbnail_enabled": False,
+    "source_thumbnail_max_sources": 3,
+    "source_thumbnail_timeout_seconds": 10,
+    "blocked_thumbnail_source_domains": [
+        "rd9sports.online",
+        "rd9sports.pro",
+        "rd9.riddlearena.com"
+    ],
     "max_sources_per_match": 8,
     "auto_discover_portals": DEFAULT_DISCOVERY_PORTALS,
     "discovery_portals": DEFAULT_DISCOVERY_PORTALS,
@@ -205,7 +220,24 @@ def legacy_portal_blog_config():
         "client_secret": legacy.get("client_secret", ""),
         "refresh_token": legacy.get("refresh_token", ""),
         "widget_base_url": legacy.get("widget_base_url", ""),
+        "match_info_widget_html": legacy.get("match_info_widget_html", ""),
+        "match_info_widget_iframe_url": legacy.get("match_info_widget_iframe_url", ""),
+        "match_info_widget_height": legacy.get("match_info_widget_height", 520),
+        "fixture_widget_iframe_url": legacy.get("fixture_widget_iframe_url", ""),
+        "fixture_widget_height": legacy.get("fixture_widget_height", 360),
+        "default_match_info_iframe_enabled": legacy.get("default_match_info_iframe_enabled", False),
+        "use_iframe_match_info_widget": legacy.get("use_iframe_match_info_widget", False),
+        "default_match_info_iframe_domains": legacy.get("default_match_info_iframe_domains", [
+            "90live.yallatvlive.com",
+            "es.footem.in",
+            "worldcup.epicsports.mobi",
+            "worldcup.epicsports.co.in"
+        ]),
+        "world_cup_page_hero_image_url": legacy.get("world_cup_page_hero_image_url", ""),
+        "prefer_existing_pages_on_refresh": legacy.get("prefer_existing_pages_on_refresh", True),
         "image_base_url": legacy.get("image_base_url", ""),
+        "thumbnail_url_map": legacy.get("thumbnail_url_map", {}),
+        "allow_global_thumbnail_fallback": legacy.get("allow_global_thumbnail_fallback", False),
         "master_player_url": legacy.get("master_player_url", ""),
         "whatsapp_groups": legacy.get("whatsapp_groups", []),
         "telegram_channels": legacy.get("telegram_channels", []),
@@ -214,7 +246,14 @@ def legacy_portal_blog_config():
         "random_btn_text": legacy.get("random_btn_text", ""),
         "random_btn_url": legacy.get("random_btn_url", ""),
         "ads": {},
-        "default_channel_info": legacy.get("default_channel_info", "Channel details will be updated before kickoff.")
+        "default_match_genre": legacy.get("default_match_genre", legacy.get("default_league", "Live Sports")),
+        "default_channel_info": legacy.get("default_channel_info", "Channel details will be updated before kickoff."),
+        "bump_preview_published_on_refresh": legacy.get("bump_preview_published_on_refresh", True),
+        "streaming_page_title_format": legacy.get("streaming_page_title_format", "{team_code} INFO"),
+        "streaming_page_url_seed_format": legacy.get("streaming_page_url_seed_format", "{team1} vs {team2} Live Streaming"),
+        "prominent_team_priority": legacy.get("prominent_team_priority", []),
+        "team_title_codes": legacy.get("team_title_codes", {}),
+        "embed_local_thumbnails_when_no_image_base_url": legacy.get("embed_local_thumbnails_when_no_image_base_url", True)
     }
 
 
@@ -236,6 +275,19 @@ def load_automation_config(master_path=MASTER_CONFIG_FILE):
 
     config["portal_blog"]["ads"] = merge_missing(config["portal_blog"].get("ads", {}), DEFAULT_PORTAL_ADS)
     config["player_blog"]["ads"] = merge_missing(config["player_blog"].get("ads", {}), DEFAULT_PLAYER_ADS)
+    config["portal_blog"]["streaming_page_title_format"] = (
+        config["portal_blog"].get("streaming_page_title_format") or "{team_code} INFO"
+    )
+    config["portal_blog"]["streaming_page_url_seed_format"] = (
+        config["portal_blog"].get("streaming_page_url_seed_format") or "{team1} vs {team2} Live Streaming"
+    )
+    if "embed_local_thumbnails_when_no_image_base_url" not in config["portal_blog"]:
+        config["portal_blog"]["embed_local_thumbnails_when_no_image_base_url"] = True
+    config["portal_blog"]["prominent_team_priority"] = first_list(
+        config["portal_blog"].get("prominent_team_priority"),
+        config["portal_blog"].get("title_priority_teams"),
+        config["portal_blog"].get("priority_teams")
+    )
 
     config["shared_social"]["whatsapp_groups"] = first_list(
         config["shared_social"].get("whatsapp_groups"),

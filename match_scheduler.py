@@ -18,6 +18,7 @@ from automation_config import (
     has_oauth,
     load_automation_config,
 )
+from lineup_manager import refresh_lineups_for_match
 from pipeline_storage import (
     archive_completed_matches,
     ensure_runtime_dirs,
@@ -26,8 +27,16 @@ from pipeline_storage import (
     save_schedule,
     storage_config,
 )
-from portal_renderer import parse_match_time, render_streaming_page, slugify_match_name, streaming_page_title
-from precreate_posts import create_blogger_page, find_existing_blogger_page, is_manual_portal_match, update_blogger_page
+from portal_renderer import (
+    parse_match_time,
+    preview_post_title,
+    render_preview_post,
+    render_streaming_page,
+    slugify_match_name,
+    streaming_page_title,
+)
+from precreate_posts import create_stream_blogger_page, find_existing_blogger_page, is_manual_portal_match, update_blogger_page
+from thumbnail_manager import with_thumbnail_src
 
 SCHEDULE_FILE = "match_schedule.json"
 CONFIG_FILE = "blogger_config.json"
@@ -177,9 +186,12 @@ def write_direct_links(match_name, post_url, player_html, config=None):
     # Regex to extract the STREAM_LINKS list
     match_data = re.search(r'const STREAM_LINKS\s*=\s*(\[.*?\]);', player_html, re.DOTALL)
     if not match_data:
-        return
+        return False
     try:
         links_data = json.loads(match_data.group(1))
+        if not links_data:
+            print(f"[!] No STREAM_LINKS entries found for {match_name}; links HTML was not written.")
+            return False
         
         # 1. Plain text format
         lines = []
@@ -314,8 +326,10 @@ def write_direct_links(match_name, post_url, player_html, config=None):
             
         print(f"[+] Direct links list successfully written to plain text and HTML list files for {match_name}")
         print(content)
+        return True
     except Exception as e:
         print(f"[-] Error writing direct links list: {e}")
+        return False
 
 
 def extract_stream_links(player_html):
@@ -333,12 +347,20 @@ def links_html_path(match_name, config=None):
     return os.path.join(storage_config(config).get("links_dir"), f"links_{slugify_match_name(match_name)}.html")
 
 
+def links_html_has_buttons(html):
+    return bool(re.search(r'<a\b[^>]*\bhref=["\']https?://[^"\']+["\'][^>]*>', html or "", flags=re.IGNORECASE))
+
+
 def read_links_html(match_name, config=None):
     path = links_html_path(match_name, config)
     if not os.path.exists(path):
         return ""
     with open(path, "r", encoding="utf-8") as lf:
-        return lf.read()
+        html = lf.read()
+    if not links_html_has_buttons(html):
+        print(f"[!] Links HTML has no real stream anchors: {path}")
+        return ""
+    return html
 
 
 def active_window(match, scheduler_config):
@@ -380,25 +402,31 @@ def select_player_slot(match, schedule, slots, now, scheduler_config):
     return None
 
 
-def update_portal_match_page(new_config, new_token, match, state, links_html=""):
+def update_portal_match_page(automation_config, new_config, new_token, match, state, links_html=""):
     if is_manual_portal_match(match):
         print(f"[*] Skipping manual portal update for {match['match_name']} as state={state}.")
         return match.get("new_blogger_page_url") or match.get("new_blogger_post_url")
 
-    title = streaming_page_title(match)
-    page_html = render_streaming_page(new_config, match, state=state, links_html=links_html)
+    render_match = with_thumbnail_src(automation_config, new_config, match)
+    title = streaming_page_title(render_match, new_config)
+    page_html = render_streaming_page(new_config, render_match, state=state, links_html=links_html)
     page_id = str(match.get("new_blogger_page_id") or "").strip()
     if page_id and not page_id.startswith("YOUR_"):
         print(f"[*] Updating portal Page {page_id} as state={state}...")
         page_url = update_blogger_page(new_config, new_token, page_id, title, page_html)
     else:
         print("[*] Portal Page ID missing; searching or creating the canonical streaming Page...")
-        found_id, _ = find_existing_blogger_page(new_config, new_token, title, match["match_name"])
+        found_id, found_url = find_existing_blogger_page(new_config, new_token, title, match["match_name"])
         if found_id:
             page_id = found_id
+            if found_url:
+                match["new_blogger_page_url"] = found_url
+                render_match = with_thumbnail_src(automation_config, new_config, match)
+                title = streaming_page_title(render_match, new_config)
+                page_html = render_streaming_page(new_config, render_match, state=state, links_html=links_html)
             page_url = update_blogger_page(new_config, new_token, page_id, title, page_html)
         else:
-            page_id, page_url = create_blogger_page(new_config, new_token, title, page_html)
+            page_id, page_url = create_stream_blogger_page(new_config, new_token, render_match, title, page_html)
         match["new_blogger_page_id"] = page_id
 
     match["new_blogger_page_url"] = page_url
@@ -518,6 +546,21 @@ def append_source_to_match(match, source_url, max_sources):
     urls.append(source_url)
     match["source_url"] = urls if len(urls) > 1 else urls[0]
     return True
+
+
+def within_source_discovery_window(match, scheduler_config, now_utc):
+    hours = scheduler_config.get("source_discovery_hours_before")
+    if hours in (None, "", 0, "0"):
+        return True
+    try:
+        hours = float(hours)
+        match_time = parse_time(match["match_time"])
+        _, run_end, _ = active_window(match, scheduler_config)
+    except Exception:
+        return True
+    if now_utc > run_end:
+        return False
+    return match_time <= now_utc + timedelta(hours=hours)
 
 
 def extract_discovery_candidates(portal, html, trusted_domains):
@@ -649,7 +692,9 @@ def auto_discover_matches(force=False):
                             best_score = score
 
                 if matched_existing:
-                    if append_source_to_match(matched_existing, resolved_url, max_sources):
+                    now_utc = datetime.now(timezone.utc)
+                    can_refresh_sources = within_source_discovery_window(matched_existing, scheduler_config, now_utc)
+                    if can_refresh_sources and append_source_to_match(matched_existing, resolved_url, max_sources):
                         existing_urls.add(resolved_url_key)
                         discovered_any = True
                         print(f"[+] Appended source URL to {matched_existing['match_name']}: {resolved_url}")
@@ -830,6 +875,31 @@ def check_and_run():
 
             if should_run:
                 print(f"[*] Starting process/update for active match: {match['match_name']}")
+                lineups_changed = False
+                try:
+                    lineups_changed = refresh_lineups_for_match(match, scheduler_config, now, active=True)
+                    if lineups_changed:
+                        print(f"[*] Lineup info checked/updated for active match: {match['match_name']}")
+                        match["new_blog_prepare_set"] = False
+                        post_id = str(match.get("new_blogger_post_id") or "").strip()
+                        if portal_updates_enabled and post_id:
+                            try:
+                                new_token = get_access_token(new_config)
+                                render_match = with_thumbnail_src(automation_config, new_config, match)
+                                post_html = render_preview_post(new_config, render_match)
+                                post_url = update_blogger_post(
+                                    new_config,
+                                    new_token,
+                                    post_id,
+                                    preview_post_title(render_match, new_config),
+                                    post_html,
+                                )
+                                match["new_blogger_post_url"] = post_url
+                                print(f"[+] Preview post refreshed with lineup update: {post_url}")
+                            except Exception as e:
+                                print(f"[-] Preview post lineup refresh failed: {e}")
+                except Exception as e:
+                    print(f"[-] Lineup refresh failed: {e}")
                 match["status"] = "processing"
                 save_schedule(schedule, automation_config) # Save status immediately
                 
@@ -876,7 +946,7 @@ def check_and_run():
                     if portal_updates_enabled and not match.get("new_blog_prepare_set"):
                         try:
                             new_token = get_access_token(new_config)
-                            update_portal_match_page(new_config, new_token, match, "preparing")
+                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
                             match["new_blog_prepare_set"] = True
                         except Exception as e:
                             print(f"[-] Portal preparing-state update failed: {e}")
@@ -894,7 +964,7 @@ def check_and_run():
                         if portal_updates_enabled and not match.get("new_blog_iframe_set") and not match.get("new_blog_prepare_set"):
                             try:
                                 new_token = get_access_token(new_config)
-                                update_portal_match_page(new_config, new_token, match, "preparing")
+                                update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
                                 match["new_blog_prepare_set"] = True
                             except Exception as e:
                                 print(f"[-] Portal preparing-state update failed: {e}")
@@ -925,26 +995,31 @@ def check_and_run():
                     print("[!] Blogger OAuth not fully configured for stream host blog.")
 
                 # Step 3: Generate portal buttons and update the NEW Blogger page when real links exist
+                links_written = False
                 if post_url and real_stream_links:
-                    write_direct_links(match["match_name"], post_url, player_html, automation_config)
+                    links_written = write_direct_links(match["match_name"], post_url, player_html, automation_config)
 
                 if portal_updates_enabled and post_url and not match.get("new_blog_iframe_set"):
                     try:
                         print("[*] Fetching access token for the portal blog...")
                         new_token = get_access_token(new_config)
-                        if real_stream_links:
+                        if real_stream_links and links_written:
                             links_html = read_links_html(match["match_name"], automation_config)
                             if not links_html:
                                 print("[!] Stream links were extracted but links HTML is missing; setting preparing state.")
-                                update_portal_match_page(new_config, new_token, match, "preparing")
+                                update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
                                 match["new_blog_prepare_set"] = True
                             else:
-                                new_post_url = update_portal_match_page(new_config, new_token, match, "live", links_html=links_html)
+                                new_post_url = update_portal_match_page(automation_config, new_config, new_token, match, "live", links_html=links_html)
                                 print(f"[+] Portal page updated with live links: {new_post_url}")
                                 match["new_blog_iframe_set"] = True
                                 match["new_blog_prepare_set"] = False
+                        elif real_stream_links:
+                            print("[!] Stream links were extracted but no valid portal button HTML was written; setting preparing state.")
+                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                            match["new_blog_prepare_set"] = True
                         elif not match.get("new_blog_prepare_set"):
-                            update_portal_match_page(new_config, new_token, match, "preparing")
+                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
                             match["new_blog_prepare_set"] = True
                     except Exception as e:
                         print(f"[-] Portal blog update failed: {e}")
@@ -961,7 +1036,7 @@ def check_and_run():
             if portal_updates_enabled and not match.get("new_blog_ended_set"):
                 try:
                     new_token = get_access_token(new_config)
-                    update_portal_match_page(new_config, new_token, match, "ended")
+                    update_portal_match_page(automation_config, new_config, new_token, match, "ended")
                     match["new_blog_ended_set"] = True
                 except Exception as e:
                     print(f"[-] Portal ended-state update failed: {e}")

@@ -4,14 +4,17 @@ import sys
 import json
 import time
 import requests
+import math
 from datetime import datetime, timedelta, timezone
 import re
 
 from automation_config import get_portal_blog_config, get_scheduler_config, has_oauth, load_automation_config
+from lineup_manager import refresh_lineups_for_match
 from pipeline_storage import archive_completed_matches, ensure_runtime_dirs, load_schedule, match_key, save_schedule
 from portal_renderer import (
     IST,
     get_channel_info,
+    display_team_name,
     parse_match_time,
     preview_post_title,
     render_preview_post,
@@ -19,7 +22,9 @@ from portal_renderer import (
     slugify_match_name,
     split_teams,
     streaming_page_title,
+    streaming_page_url_seed_title,
 )
+from thumbnail_manager import refresh_thumbnail_url_from_sources, sanitize_thumbnail_fields, thumbnail_path, with_thumbnail_src
 
 SCHEDULE_FILE = "match_schedule.json"
 CONFIG_FILE = "new_blogger_config.json"
@@ -111,7 +116,7 @@ def create_blogger_post(config, access_token, title, html_content):
     res_data = response.json()
     return res_data.get("id"), res_data.get("url")
 
-def update_blogger_post(config, access_token, post_id, title, html_content):
+def update_blogger_post(config, access_token, post_id, title, html_content, published=None):
     blog_id = config.get("blog_id")
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
     headers = {
@@ -125,6 +130,8 @@ def update_blogger_post(config, access_token, post_id, title, html_content):
         "title": title,
         "content": html_content
     }
+    if published:
+        payload["published"] = published
     response = requests.patch(url, headers=headers, json=payload, timeout=20)
     response.raise_for_status()
     return response.json().get("url")
@@ -146,6 +153,16 @@ def create_blogger_page(config, access_token, title, html_content):
     response.raise_for_status()
     res_data = response.json()
     return res_data.get("id"), res_data.get("url")
+
+
+def create_stream_blogger_page(config, access_token, match, title, html_content):
+    seed_title = streaming_page_url_seed_title(match, config)
+    if normalize_title(seed_title) == normalize_title(title):
+        return create_blogger_page(config, access_token, title, html_content)
+
+    page_id, page_url = create_blogger_page(config, access_token, seed_title, html_content)
+    patched_url = update_blogger_page(config, access_token, page_id, title, html_content)
+    return page_id, patched_url or page_url
 
 def update_blogger_page(config, access_token, page_id, title, html_content):
     blog_id = config.get("blog_id")
@@ -201,15 +218,17 @@ def match_words(text):
     return set(words)
 
 
-def item_matches_title_or_match(item, title, match_name=None):
+def item_matches_title_or_match(item, title, match_name=None, allow_title_only=False):
     item_title = item.get("title", "")
+    expected = match_words(match_name or "")
+    combined = match_words(f"{item_title} {item.get('url', '')}")
     if normalize_title(item_title) == normalize_title(title):
-        return True
+        if allow_title_only or not expected:
+            return True
+        return expected.issubset(combined)
     if not match_name:
         return False
-    expected = match_words(match_name)
-    actual = match_words(item_title)
-    return len(expected) >= 2 and expected.issubset(actual)
+    return len(expected) >= 2 and expected.issubset(combined)
 
 
 def find_existing_blogger_post(config, access_token, title, match_name=None):
@@ -241,7 +260,7 @@ def find_existing_blogger_post(config, access_token, title, match_name=None):
         response.raise_for_status()
         data = response.json()
         for item in data.get("items", []):
-            if item_matches_title_or_match(item, title, match_name):
+            if item_matches_title_or_match(item, title, match_name, allow_title_only=True):
                 return item.get("id"), item.get("url")
         page_token = data.get("nextPageToken")
         if not page_token:
@@ -254,6 +273,23 @@ def find_existing_blogger_page(config, access_token, title, match_name=None):
     headers = {"Authorization": f"Bearer {access_token}"}
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/pages"
     page_token = None
+    matches = []
+
+    def page_reuse_score(item):
+        item_url = (item.get("url") or "").lower()
+        title_slug = re.sub(r"[^a-z0-9]+", "-", normalize_title(title)).strip("-")
+        score = 100
+        if title_slug and item_url.endswith(f"/{title_slug}.html"):
+            score = 0
+        elif item_url.endswith("-info.html") and "-vs-" not in item_url and "live-streaming" not in item_url:
+            score = 10
+        elif "live-streaming" not in item_url:
+            score = 20
+        else:
+            score = 30
+        if normalize_title(item.get("title", "")) == normalize_title(title):
+            score -= 5
+        return score
 
     for _ in range(5):
         params = {"fetchBodies": "false", "maxResults": 100}
@@ -263,11 +299,14 @@ def find_existing_blogger_page(config, access_token, title, match_name=None):
         response.raise_for_status()
         data = response.json()
         for item in data.get("items", []):
-            if item_matches_title_or_match(item, title, match_name):
-                return item.get("id"), item.get("url")
+            if item_matches_title_or_match(item, title, match_name, allow_title_only=True):
+                matches.append(item)
         page_token = data.get("nextPageToken")
         if not page_token:
             break
+    if matches:
+        best = sorted(matches, key=page_reuse_score)[0]
+        return best.get("id"), best.get("url")
     return None, None
 
 def generate_thumbnail(team1, team2, match_time_str, output_path, league="", channel=""):
@@ -277,60 +316,135 @@ def generate_thumbnail(team1, team2, match_time_str, output_path, league="", cha
         print("[!] Pillow library not found. Skipping image generation.")
         return False
 
-    template_path = "match_thumbnail.png"
-    if os.path.exists(template_path):
-        img = Image.open(template_path).convert("RGB")
-    else:
-        # Fallback gradient
-        img = Image.new("RGB", (800, 800), color="#0c0d14")
-        draw = ImageDraw.Draw(img)
-        for i in range(800):
-            r = int(12 + (i / 800) * 10)
-            g = int(13 + (i / 800) * 15)
-            b = int(20 + (i / 800) * 25)
-            draw.line([(0, i), (800, i)], fill=(r, g, b))
-
+    output_size = (1280, 720)
+    img = Image.new("RGB", output_size, color="#fbfbf7")
     draw = ImageDraw.Draw(img)
     width, height = img.size
 
-    # Try standard system fonts
-    font_paths = [
+    font_paths = (
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-        "arial.ttf"
-    ]
-    font_title = None
-    font_sub = None
-    for p in font_paths:
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    )
+
+    def load_font(size):
+        for path in font_paths:
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def text_size(text, font):
         try:
-            font_title = ImageFont.truetype(p, 42)
-            font_sub = ImageFont.truetype(p, 22)
-            break
+            box = draw.textbbox((0, 0), text, font=font)
+            return box[2] - box[0], box[3] - box[1]
         except Exception:
-            continue
+            return draw.textlength(text, font=font), font.size if hasattr(font, "size") else 20
 
-    if not font_title:
-        font_title = ImageFont.load_default()
-        font_sub = ImageFont.load_default()
+    def centered_text(text, y, font, fill, stroke_width=0, stroke_fill="#ffffff"):
+        text = str(text or "")
+        tw, _ = text_size(text, font)
+        draw.text(((width - tw) / 2, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=stroke_fill)
 
-    # Semi-transparent card overlay
-    overlay_y1 = int(height * 0.60)
-    overlay_y2 = int(height * 0.90)
+    def fit_font(text, max_width, start_size, min_size=28):
+        size = start_size
+        while size > min_size:
+            font = load_font(size)
+            tw, _ = text_size(text, font)
+            if tw <= max_width:
+                return font
+            size -= 3
+        return load_font(min_size)
 
-    # Draw card backing with subtle outline
-    draw.rectangle([40, overlay_y1, width - 40, overlay_y2], fill=(12, 13, 20, 220), outline=(255, 255, 255, 30), width=1)
+    def team_colors(name):
+        palettes = {
+            "qatar": ["#8a1538", "#ffffff"],
+            "switzerland": ["#e30613", "#ffffff"],
+            "scotland": ["#005eb8", "#ffffff"],
+            "haiti": ["#00209f", "#d21034"],
+            "turkey": ["#e30a17", "#ffffff"],
+            "turkiye": ["#e30a17", "#ffffff"],
+            "australia": ["#012169", "#ffcd00", "#00843d"],
+            "brazil": ["#009b3a", "#ffdf00", "#002776"],
+            "morocco": ["#c1272d", "#006233"],
+            "mexico": ["#006847", "#ffffff", "#ce1126"],
+            "south africa": ["#007a4d", "#ffb612", "#de3831", "#002395"],
+        }
+        key = re.sub(r"[^a-z0-9 ]+", "", str(name or "").lower()).strip()
+        if key in palettes:
+            return palettes[key]
+        seed = sum(ord(char) for char in key)
+        base = ["#004c97", "#0b8f3a", "#c8102e", "#ffb300", "#6a1b9a", "#111111"]
+        return [base[seed % len(base)], base[(seed + 2) % len(base)]]
 
-    # Format text
-    team_text = f"{team1} VS {team2}"
-    try:
-        w_text = draw.textlength(team_text, font=font_title)
-    except AttributeError:
-        w_text = font_title.getsize(team_text)[0] if hasattr(font_title, 'getsize') else 350
-    x_text = (width - w_text) // 2
-    draw.text((x_text, overlay_y1 + 30), team_text, fill="#ffffff", font=font_title)
+    def draw_star(cx, cy, radius, fill):
+        points = []
+        for idx in range(10):
+            angle = -90 + idx * 36
+            r = radius if idx % 2 == 0 else radius * 0.42
+            points.append((cx + r * math.cos(math.radians(angle)), cy + r * math.sin(math.radians(angle))))
+        draw.polygon(points, fill=fill)
 
-    # Format time
+    def draw_flag_content(x, y, w, h, name):
+        key = re.sub(r"[^a-z0-9 ]+", "", str(name or "").lower()).strip()
+        if key == "brazil":
+            draw.rectangle([x, y, x + w, y + h], fill="#009b3a")
+            draw.polygon([(x + w * .5, y + h * .12), (x + w * .88, y + h * .5), (x + w * .5, y + h * .88), (x + w * .12, y + h * .5)], fill="#ffdf00")
+            draw.ellipse([x + w * .36, y + h * .28, x + w * .64, y + h * .56], fill="#002776")
+            return
+        if key == "morocco":
+            draw.rectangle([x, y, x + w, y + h], fill="#c1272d")
+            draw_star(x + w / 2, y + h / 2, min(w, h) * .19, "#006233")
+            return
+        if key in ("switzerland", "swiss"):
+            draw.rectangle([x, y, x + w, y + h], fill="#e30613")
+            draw.rectangle([x + w * .43, y + h * .24, x + w * .57, y + h * .76], fill="#ffffff")
+            draw.rectangle([x + w * .26, y + h * .43, x + w * .74, y + h * .57], fill="#ffffff")
+            return
+        if key == "qatar":
+            draw.rectangle([x, y, x + w, y + h], fill="#8a1538")
+            tooth_w = w * .28
+            draw.rectangle([x, y, x + tooth_w * .55, y + h], fill="#ffffff")
+            points = []
+            step = h / 9
+            for i in range(10):
+                points.append((x + tooth_w * (.55 if i % 2 == 0 else 1.0), y + i * step))
+            points.extend([(x, y + h), (x, y)])
+            draw.polygon(points, fill="#ffffff")
+            return
+        if key == "scotland":
+            draw.rectangle([x, y, x + w, y + h], fill="#005eb8")
+            draw.line([x, y, x + w, y + h], fill="#ffffff", width=max(8, int(h * .12)))
+            draw.line([x + w, y, x, y + h], fill="#ffffff", width=max(8, int(h * .12)))
+            return
+        if key == "haiti":
+            draw.rectangle([x, y, x + w, y + h / 2], fill="#00209f")
+            draw.rectangle([x, y + h / 2, x + w, y + h], fill="#d21034")
+            draw.rectangle([x + w * .38, y + h * .34, x + w * .62, y + h * .66], fill="#ffffff")
+            return
+        if key in ("turkey", "turkiye"):
+            draw.rectangle([x, y, x + w, y + h], fill="#e30a17")
+            draw.ellipse([x + w * .27, y + h * .28, x + w * .55, y + h * .72], fill="#ffffff")
+            draw.ellipse([x + w * .34, y + h * .31, x + w * .60, y + h * .69], fill="#e30a17")
+            draw_star(x + w * .66, y + h * .5, min(w, h) * .14, "#ffffff")
+            return
+        colors = team_colors(name)
+        draw.rounded_rectangle([x, y, x + w, y + h], radius=24, fill="#ffffff", outline="#d6d6d6", width=3)
+        stripe_w = max(1, w // len(colors))
+        for idx, color in enumerate(colors):
+            x1 = x + idx * stripe_w
+            x2 = x + w if idx == len(colors) - 1 else x + (idx + 1) * stripe_w
+            draw.rectangle([x1 + 8, y + 8, x2 - 8, y + h - 54], fill=color)
+
+    def draw_flag_card(x, y, w, h, name):
+        draw.rounded_rectangle([x, y, x + w, y + h], radius=24, fill="#ffffff", outline="#d6d6d6", width=3)
+        draw_flag_content(x + 8, y + 8, w - 16, h - 60, name)
+        label_font = fit_font(str(name).upper(), w - 28, 34, 22)
+        tw, _ = text_size(str(name).upper(), label_font)
+        draw.text((x + (w - tw) / 2, y + h - 45), str(name).upper(), font=label_font, fill="#071a33")
+
     try:
         if match_time_str.endswith("Z"):
             match_time_str = match_time_str[:-1] + "+00:00"
@@ -339,28 +453,76 @@ def generate_thumbnail(team1, team2, match_time_str, output_path, league="", cha
     except Exception:
         time_text = match_time_str
 
-    try:
-        w_time = draw.textlength(time_text, font=font_sub)
-    except AttributeError:
-        w_time = font_sub.getsize(time_text)[0] if hasattr(font_sub, 'getsize') else 250
-    x_time = (width - w_time) // 2
-    draw.text((x_time, overlay_y1 + 100), time_text, fill="#00e5ff", font=font_sub)
+    team1 = display_team_name(team1 or "Team A")
+    team2 = display_team_name(team2 or "Team B")
+    genre = league if league and league != "TBA" else "FIFA World Cup 2026"
+    template_path = "post_thumbnail_reference.jpg"
+    if os.path.exists(template_path):
+        template = Image.open(template_path).convert("RGB")
+        ratio = max(width / template.width, height / template.height)
+        resized = template.resize((int(template.width * ratio), int(template.height * ratio)), Image.Resampling.LANCZOS)
+        left = (resized.width - width) // 2
+        top = (resized.height - height) // 2
+        img = resized.crop((left, top, left + width, top + height))
+        draw = ImageDraw.Draw(img)
 
-    detail_text = " | ".join(part for part in [league, channel] if part and part != "TBA")
-    if detail_text:
-        detail_text = detail_text[:70]
-        try:
-            w_detail = draw.textlength(detail_text, font=font_sub)
-        except AttributeError:
-            w_detail = font_sub.getsize(detail_text)[0] if hasattr(font_sub, 'getsize') else 250
-        x_detail = (width - w_detail) // 2
-        draw.text((x_detail, overlay_y1 + 140), detail_text, fill="#ffffff", font=font_sub)
+        draw.rounded_rectangle([230, 246, 528, 462], radius=26, fill="#ffffff", outline="#d7d7d7", width=4)
+        draw.rounded_rectangle([672, 246, 970, 462], radius=26, fill="#ffffff", outline="#d7d7d7", width=4)
+        draw.rounded_rectangle([530, 242, 670, 500], radius=18, fill="#fffefa", outline="#fffefa", width=1)
+        draw.rectangle([292, 460, 520, 536], fill="#fffefa")
+        draw.rectangle([690, 460, 930, 536], fill="#fffefa")
+        draw_flag_card(242, 256, 274, 200, team1)
+        draw_flag_card(684, 256, 274, 200, team2)
+        centered_text("VS", 298, load_font(82), "#071a33")
+    else:
+        for offset, color in ((0, "#00843d"), (18, "#ffffff"), (36, "#d50032")):
+            draw.arc([-180 + offset, -190 + offset, 520 + offset, 510 + offset], 85, 184, fill=color, width=18)
+        for offset, color in ((0, "#d50032"), (18, "#ffffff"), (36, "#0057b8")):
+            draw.arc([760 - offset, -120 + offset, 1460 - offset, 580 + offset], 350, 88, fill=color, width=18)
+        draw.polygon([(0, 625), (150, 720), (0, 720)], fill="#004c97")
+        draw.polygon([(1280, 610), (1125, 720), (1280, 720)], fill="#d50032")
 
-    # Save
+        for x in range(0, width, 92):
+            draw.line([(x, 520), (x - 190, 720)], fill="#e8edf2", width=2)
+        draw.rectangle([0, 570, width, height], fill="#f5f7f8")
+        draw.arc([90, 410, 1190, 1040], 200, 340, fill="#d9e2e7", width=3)
+        draw.line([(125, 610), (1155, 610)], fill="#d9e2e7", width=3)
+
+        centered_text("FIFA WORLD CUP", 42, load_font(44), "#071a33")
+        centered_text("2026", 88, load_font(64), "#009b3a", stroke_width=1, stroke_fill="#ffffff")
+        draw.ellipse([118, 70, 182, 134], outline="#d9c79e", width=8)
+        draw.rectangle([136, 128, 164, 210], fill="#d9c79e")
+        draw.pieslice([105, 185, 195, 260], 0, 180, fill="#d9c79e")
+        draw_flag_card(160, 235, 330, 205, team1)
+        draw_flag_card(790, 235, 330, 205, team2)
+        centered_text("VS", 285, load_font(74), "#071a33")
+
+        pill_x1, pill_y1, pill_x2, pill_y2 = 360, 472, 920, 536
+        draw.rounded_rectangle([pill_x1, pill_y1, pill_x2, pill_y2], radius=34, fill="#ffffff", outline="#e0e0e0", width=3)
+        draw.ellipse([pill_x1 + 22, pill_y1 + 16, pill_x1 + 46, pill_y1 + 40], fill="#4285f4")
+        draw.text((pill_x1 + 72, pill_y1 + 15), "goforsports.net", font=load_font(30), fill="#1d1d1d")
+        draw.ellipse([pill_x2 - 58, pill_y1 + 17, pill_x2 - 34, pill_y1 + 41], outline="#1d1d1d", width=4)
+        draw.line([(pill_x2 - 38, pill_y1 + 38), (pill_x2 - 24, pill_y1 + 52)], fill="#1d1d1d", width=4)
+        centered_text(str(genre).upper(), 555, fit_font(str(genre).upper(), 900, 34, 24), "#a67c2d")
+        centered_text(time_text.upper(), 604, fit_font(time_text.upper(), 900, 30, 22), "#071a33")
+        centered_text("USA | CANADA | MEXICO", 650, load_font(24), "#0057b8")
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    img.save(output_path, "JPEG", quality=92)
+    img.save(output_path, "JPEG", quality=90, optimize=True)
     print(f"[+] Generated thumbnail image: {output_path}")
     return True
+
+
+def thumbnail_needs_generation(path):
+    if not os.path.exists(path):
+        return True
+    try:
+        from PIL import Image
+        with Image.open(path) as image:
+            ratio = image.width / float(image.height)
+            return abs(ratio - (16 / 9)) > 0.01
+    except Exception:
+        return True
 
 def generate_post_html(config, match, safe_name):
     match_name = match["match_name"]
@@ -669,19 +831,96 @@ def log_dry_run(message):
     print(f"[dry-run] {message}")
 
 
+def resolve_ist_date_selector(selector, now):
+    selector = str(selector or "").strip().lower()
+    today = now.astimezone(IST).date()
+    if selector == "today":
+        return today
+    if selector == "tomorrow":
+        return today + timedelta(days=1)
+    try:
+        return datetime.strptime(selector, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError("Use today, tomorrow, or YYYY-MM-DD for --for-ist-date.") from exc
+
+
+def match_in_ist_date(match, target_date):
+    try:
+        return parse_match_time(match["match_time"]).astimezone(IST).date() == target_date
+    except Exception:
+        return False
+
+
+def match_within_hours(match, now, hours):
+    try:
+        match_time = parse_match_time(match["match_time"])
+    except Exception:
+        return False
+    return now <= match_time <= now + timedelta(hours=hours)
+
+
+def match_in_precreate_scope(match, target_ist_date, within_hours, now):
+    if match.get("status") == "completed":
+        return False
+    if match.get("status", "pending") not in ("pending", "processing", "active", "live"):
+        return False
+    if target_ist_date and not match_in_ist_date(match, target_ist_date):
+        return False
+    if within_hours is not None and not match_within_hours(match, now, within_hours):
+        return False
+    if is_manual_portal_match(match):
+        return False
+    return True
+
+
+def preview_publish_overrides(schedule, target_ist_date, within_hours, now, enabled=True):
+    if not enabled:
+        return {}
+    scoped = []
+    for match in schedule:
+        if not match_in_precreate_scope(match, target_ist_date, within_hours, now):
+            continue
+        try:
+            kickoff = parse_match_time(match["match_time"])
+        except Exception:
+            kickoff = now + timedelta(days=365)
+        scoped.append((kickoff, match_key(match), match))
+    scoped.sort(key=lambda item: (item[0], item[1]))
+    return {
+        key: (now - timedelta(minutes=idx)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        for idx, (_kickoff, key, _match) in enumerate(scoped)
+    }
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Create/update portal Blogger preview posts and streaming pages safely.")
     parser.add_argument("--dry-run", action="store_true", help="Show actions without creating, updating, saving schedule, or generating thumbnails.")
     parser.add_argument("--create-missing-only", action="store_true", help="Only create missing portal items. Existing Page/Post content is not refreshed. This is the default.")
     parser.add_argument("--refresh-existing", action="store_true", help="Refresh existing auto-managed portal Page/Post content.")
+    parser.add_argument("--for-ist-date", help="Only process matches on an IST calendar date: today, tomorrow, or YYYY-MM-DD.")
+    parser.add_argument("--within-hours", type=float, help="Only process matches kicking off within the next N hours from now UTC.")
     args = parser.parse_args()
 
     if args.create_missing_only and args.refresh_existing:
         print("[-] Choose either --create-missing-only or --refresh-existing, not both.")
         sys.exit(2)
+    if args.for_ist_date and args.within_hours is not None:
+        print("[-] Choose either --for-ist-date or --within-hours, not both.")
+        sys.exit(2)
+    if args.within_hours is not None and args.within_hours <= 0:
+        print("[-] --within-hours must be greater than zero.")
+        sys.exit(2)
 
     refresh_existing = bool(args.refresh_existing)
+    now = datetime.now(timezone.utc)
+    target_ist_date = None
+    if args.for_ist_date:
+        try:
+            target_ist_date = resolve_ist_date_selector(args.for_ist_date, now)
+        except ValueError as exc:
+            print(f"[-] {exc}")
+            sys.exit(2)
 
     print("[*] Starting Blogger precreate (Posts & Pages) pipeline...")
     if args.dry_run:
@@ -690,6 +929,10 @@ def main():
         print("[*] Existing auto-managed portal content may be refreshed.")
     else:
         print("[*] Safe mode: existing portal content will be linked/recorded but not refreshed.")
+    if target_ist_date:
+        print(f"[*] Scope: matches on IST date {target_ist_date.isoformat()} only.")
+    elif args.within_hours is not None:
+        print(f"[*] Scope: matches within the next {args.within_hours:g} hour(s) from now UTC.")
 
     automation_config = load_automation_config()
     config = get_portal_blog_config(automation_config)
@@ -714,7 +957,6 @@ def main():
         
     print("[+] OAuth token verified.")
     changed = False
-    now = datetime.now(timezone.utc)
     if args.dry_run:
         archived = []
     else:
@@ -723,11 +965,29 @@ def main():
             print(f"[*] Archived {len(archived)} completed match(es) out of the active schedule.")
             changed = True
 
+    scoped_count = 0
+    skipped_by_scope = 0
+    publish_overrides = preview_publish_overrides(
+        schedule,
+        target_ist_date,
+        args.within_hours,
+        now,
+        enabled=config.get("bump_preview_published_on_refresh", True),
+    )
+
     for match in schedule:
         if match.get("status") == "completed":
             continue
 
         if match.get("status", "pending") in ("pending", "processing", "active", "live"):
+            if target_ist_date and not match_in_ist_date(match, target_ist_date):
+                skipped_by_scope += 1
+                continue
+            if args.within_hours is not None and not match_within_hours(match, now, args.within_hours):
+                skipped_by_scope += 1
+                continue
+            scoped_count += 1
+
             if is_manual_portal_match(match):
                 print(f"\n[*] Skipping manual portal match: {match['match_name']}")
                 continue
@@ -735,11 +995,61 @@ def main():
             match["match_key"] = match.get("match_key") or match_key(match)
             safe_name = slugify_match_name(match["match_name"])
             can_refresh = can_refresh_portal_content(match, scheduler_config, now)
+
+            # Step 1: Generate Match-Specific Thumbnail image before rendering any Blogger HTML.
+            img_path = thumbnail_path(automation_config, match)
+            if thumbnail_needs_generation(img_path):
+                print(f"[*] Generating custom thumbnail for: {match['match_name']}...")
+                if args.dry_run:
+                    log_dry_run(f"Would generate thumbnail: {img_path}")
+                    changed = True
+                else:
+                    t1, t2 = split_teams(match["match_name"])
+                    generate_thumbnail(
+                        t1,
+                        t2,
+                        match["match_time"],
+                        img_path,
+                        league=match.get("match_genre") or match.get("genre") or match.get("league") or match.get("competition") or config.get("default_match_genre") or config.get("default_league", ""),
+                        channel=get_channel_info(match, config),
+                    )
+
+            if sanitize_thumbnail_fields(match, automation_config, config, scheduler_config):
+                print(f"[*] Removed blocked source thumbnail for: {match['match_name']}")
+                changed = True
+
+            render_match = with_thumbnail_src(automation_config, config, match)
+            if not render_match.get("thumbnail_url"):
+                print(f"[!] No public per-match thumbnail URL configured for: {match['match_name']}")
+            if refresh_thumbnail_url_from_sources(match, scheduler_config):
+                print(f"[*] Public thumbnail URL found for: {match['match_name']}")
+                changed = True
+                render_match = with_thumbnail_src(automation_config, config, match)
+            if refresh_lineups_for_match(match, scheduler_config, now, active=False):
+                print(f"[*] Lineup info checked/updated for: {match['match_name']}")
+                changed = True
+                render_match = with_thumbnail_src(automation_config, config, match)
             
-            # Step 1: Create or Refresh Blogger PAGE (Stream Player Page)
-            page_title = streaming_page_title(match)
-            page_html = generate_page_html(config, match, safe_name)
+            # Step 2: Create or Refresh Blogger PAGE (Stream Player Page)
+            page_title = streaming_page_title(render_match, config)
             page_id = match.get("new_blogger_page_id")
+            if config.get("prefer_existing_pages_on_refresh", True):
+                try:
+                    existing_page_id, existing_page_url = find_existing_blogger_page(config, access_token, page_title, match["match_name"])
+                except Exception as e:
+                    existing_page_id, existing_page_url = None, None
+                    print(f"[!] Existing Page lookup failed for {match['match_name']}: {e}")
+                if existing_page_id and (existing_page_id != page_id or existing_page_url != match.get("new_blogger_page_url")):
+                    print(f"[*] Using existing stream Page for: {match['match_name']} | {existing_page_url}")
+                    page_id = existing_page_id
+                    match["new_blogger_page_id"] = existing_page_id
+                    match["new_blogger_page_url"] = existing_page_url
+                    match["new_blog_iframe_set"] = False
+                    match["new_blog_prepare_set"] = False
+                    render_match = with_thumbnail_src(automation_config, config, match)
+                    page_title = streaming_page_title(render_match, config)
+                    changed = True
+            page_html = generate_page_html(config, render_match, safe_name)
             
             if not page_id:
                 print(f"\n[*] Checking stream Page for: {match['match_name']}...")
@@ -749,6 +1059,11 @@ def main():
                         print(f"[*] Found existing stream Page. ID: {existing_page_id}")
                         page_id = existing_page_id
                         page_url = existing_page_url
+                        existing_title_match = dict(match)
+                        existing_title_match["new_blogger_page_url"] = page_url
+                        existing_title_match = with_thumbnail_src(automation_config, config, existing_title_match)
+                        page_title = streaming_page_title(existing_title_match, config)
+                        page_html = generate_page_html(config, existing_title_match, safe_name)
                         if refresh_existing and can_refresh:
                             if args.dry_run:
                                 log_dry_run(f"Would refresh existing stream Page for {match['match_name']} ({page_id}).")
@@ -763,7 +1078,7 @@ def main():
                             changed = True
                             page_id, page_url = "", ""
                         else:
-                            page_id, page_url = create_blogger_page(config, access_token, page_title, page_html)
+                            page_id, page_url = create_stream_blogger_page(config, access_token, render_match, page_title, page_html)
                     if page_id and not args.dry_run:
                         match["new_blogger_page_id"] = page_id
                         match["new_blogger_page_url"] = page_url
@@ -798,28 +1113,10 @@ def main():
                 except Exception as e:
                     print(f"[-] Page refresh failed: {e}")
 
-            # Step 2: Generate Match-Specific Thumbnail image
-            img_filename = f"thumb_{safe_name}.jpg"
-            img_path = os.path.join(paths["thumbnails_dir"], img_filename)
-            if not os.path.exists(img_path):
-                print(f"[*] Generating custom thumbnail for: {match['match_name']}...")
-                if args.dry_run:
-                    log_dry_run(f"Would generate thumbnail: {img_path}")
-                    changed = True
-                else:
-                    t1, t2 = split_teams(match["match_name"])
-                    generate_thumbnail(
-                        t1,
-                        t2,
-                        match["match_time"],
-                        img_path,
-                        league=match.get("league") or match.get("competition") or config.get("default_league", ""),
-                        channel=get_channel_info(match, config),
-                    )
-
             # Step 3: Create or Refresh Blogger POST (Preview Post)
-            post_title = preview_post_title(match)
-            post_html = generate_post_html(config, match, safe_name)
+            render_match = with_thumbnail_src(automation_config, config, match)
+            post_title = preview_post_title(render_match, config)
+            post_html = generate_post_html(config, render_match, safe_name)
             post_id = match.get("new_blogger_post_id")
             
             if not post_id:
@@ -835,7 +1132,14 @@ def main():
                                 log_dry_run(f"Would refresh existing preview Post for {match['match_name']} ({post_id}).")
                                 changed = True
                             else:
-                                post_url = update_blogger_post(config, access_token, post_id, post_title, post_html)
+                                post_url = update_blogger_post(
+                                    config,
+                                    access_token,
+                                    post_id,
+                                    post_title,
+                                    post_html,
+                                    published=publish_overrides.get(match["match_key"]),
+                                )
                         else:
                             print("[*] Existing preview Post content left unchanged.")
                     else:
@@ -867,12 +1171,22 @@ def main():
                         log_dry_run(f"Would refresh preview Post for {match['match_name']} ({post_id}).")
                         changed = True
                     else:
-                        post_url = update_blogger_post(config, access_token, post_id, post_title, post_html)
+                        post_url = update_blogger_post(
+                            config,
+                            access_token,
+                            post_id,
+                            post_title,
+                            post_html,
+                            published=publish_overrides.get(match["match_key"]),
+                        )
                         match["new_blogger_post_url"] = post_url
                         print(f"[+] Post content refreshed. URL: {post_url}")
                         changed = True
                 except Exception as e:
                     print(f"[-] Post refresh failed: {e}")
+
+    if (target_ist_date or args.within_hours is not None) and scoped_count == 0:
+        print(f"\n[*] No matches found in the selected precreate scope. Skipped {skipped_by_scope} out-of-scope match(es).")
 
     if changed and not args.dry_run:
         save_schedule(schedule, automation_config)
