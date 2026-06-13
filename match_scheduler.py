@@ -27,7 +27,7 @@ from pipeline_storage import (
     storage_config,
 )
 from portal_renderer import parse_match_time, render_streaming_page, slugify_match_name, streaming_page_title
-from precreate_posts import create_blogger_page, find_existing_blogger_page, update_blogger_page
+from precreate_posts import create_blogger_page, find_existing_blogger_page, is_manual_portal_match, update_blogger_page
 
 SCHEDULE_FILE = "match_schedule.json"
 CONFIG_FILE = "blogger_config.json"
@@ -381,6 +381,10 @@ def select_player_slot(match, schedule, slots, now, scheduler_config):
 
 
 def update_portal_match_page(new_config, new_token, match, state, links_html=""):
+    if is_manual_portal_match(match):
+        print(f"[*] Skipping manual portal update for {match['match_name']} as state={state}.")
+        return match.get("new_blogger_page_url") or match.get("new_blogger_post_url")
+
     title = streaming_page_title(match)
     page_html = render_streaming_page(new_config, match, state=state, links_html=links_html)
     page_id = str(match.get("new_blogger_page_id") or "").strip()
@@ -798,6 +802,7 @@ def check_and_run():
         if status == "completed":
             continue
         match["match_key"] = match.get("match_key") or match_key(match)
+        portal_updates_enabled = has_new_oauth and not is_manual_portal_match(match)
 
         match_time = parse_time(match["match_time"])
         run_start, run_end, _ = active_window(match, scheduler_config)
@@ -868,7 +873,7 @@ def check_and_run():
                 real_stream_links = extract_stream_links(player_html)
                 if not real_stream_links:
                     print(f"[!] No playable stream links resolved for {match['match_name']}; skipping player-blog upload.")
-                    if has_new_oauth and not match.get("new_blog_prepare_set"):
+                    if portal_updates_enabled and not match.get("new_blog_prepare_set"):
                         try:
                             new_token = get_access_token(new_config)
                             update_portal_match_page(new_config, new_token, match, "preparing")
@@ -886,7 +891,7 @@ def check_and_run():
                     slot = select_player_slot(match, schedule, player_slots, now, scheduler_config)
                     if not slot:
                         print(f"[!] No free player slot available for {match['match_name']}.")
-                        if has_new_oauth and not match.get("new_blog_iframe_set") and not match.get("new_blog_prepare_set"):
+                        if portal_updates_enabled and not match.get("new_blog_iframe_set") and not match.get("new_blog_prepare_set"):
                             try:
                                 new_token = get_access_token(new_config)
                                 update_portal_match_page(new_config, new_token, match, "preparing")
@@ -923,7 +928,7 @@ def check_and_run():
                 if post_url and real_stream_links:
                     write_direct_links(match["match_name"], post_url, player_html, automation_config)
 
-                if has_new_oauth and post_url and not match.get("new_blog_iframe_set"):
+                if portal_updates_enabled and post_url and not match.get("new_blog_iframe_set"):
                     try:
                         print("[*] Fetching access token for the portal blog...")
                         new_token = get_access_token(new_config)
@@ -952,7 +957,8 @@ def check_and_run():
 
         elif now > run_end:
             print(f"[*] Match active window ended: {match['match_name']}")
-            if has_new_oauth and not match.get("new_blog_ended_set"):
+            portal_updates_enabled = has_new_oauth and not is_manual_portal_match(match)
+            if portal_updates_enabled and not match.get("new_blog_ended_set"):
                 try:
                     new_token = get_access_token(new_config)
                     update_portal_match_page(new_config, new_token, match, "ended")

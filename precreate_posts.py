@@ -657,8 +657,39 @@ def can_refresh_portal_content(match, scheduler_config, now):
     return not (run_start <= now <= run_end)
 
 
+def portal_mode(match):
+    return str(match.get("portal_mode") or "auto").strip().lower()
+
+
+def is_manual_portal_match(match):
+    return portal_mode(match) in ("manual", "skip", "disabled") or match.get("portal_managed") is False
+
+
+def log_dry_run(message):
+    print(f"[dry-run] {message}")
+
+
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Create/update portal Blogger preview posts and streaming pages safely.")
+    parser.add_argument("--dry-run", action="store_true", help="Show actions without creating, updating, saving schedule, or generating thumbnails.")
+    parser.add_argument("--create-missing-only", action="store_true", help="Only create missing portal items. Existing Page/Post content is not refreshed. This is the default.")
+    parser.add_argument("--refresh-existing", action="store_true", help="Refresh existing auto-managed portal Page/Post content.")
+    args = parser.parse_args()
+
+    if args.create_missing_only and args.refresh_existing:
+        print("[-] Choose either --create-missing-only or --refresh-existing, not both.")
+        sys.exit(2)
+
+    refresh_existing = bool(args.refresh_existing)
+
     print("[*] Starting Blogger precreate (Posts & Pages) pipeline...")
+    if args.dry_run:
+        print("[*] Dry run enabled: no Blogger writes, thumbnail writes, or schedule saves will be performed.")
+    if refresh_existing:
+        print("[*] Existing auto-managed portal content may be refreshed.")
+    else:
+        print("[*] Safe mode: existing portal content will be linked/recorded but not refreshed.")
 
     automation_config = load_automation_config()
     config = get_portal_blog_config(automation_config)
@@ -684,16 +715,23 @@ def main():
     print("[+] OAuth token verified.")
     changed = False
     now = datetime.now(timezone.utc)
-    schedule, archived = archive_completed_matches(schedule, automation_config, scheduler_config, now)
-    if archived:
-        print(f"[*] Archived {len(archived)} completed match(es) out of the active schedule.")
-        changed = True
+    if args.dry_run:
+        archived = []
+    else:
+        schedule, archived = archive_completed_matches(schedule, automation_config, scheduler_config, now)
+        if archived:
+            print(f"[*] Archived {len(archived)} completed match(es) out of the active schedule.")
+            changed = True
 
     for match in schedule:
         if match.get("status") == "completed":
             continue
 
         if match.get("status", "pending") in ("pending", "processing", "active", "live"):
+            if is_manual_portal_match(match):
+                print(f"\n[*] Skipping manual portal match: {match['match_name']}")
+                continue
+
             match["match_key"] = match.get("match_key") or match_key(match)
             safe_name = slugify_match_name(match["match_name"])
             can_refresh = can_refresh_portal_content(match, scheduler_config, now)
@@ -704,35 +742,59 @@ def main():
             page_id = match.get("new_blogger_page_id")
             
             if not page_id:
-                print(f"\n[*] Creating stream Page for: {match['match_name']}...")
+                print(f"\n[*] Checking stream Page for: {match['match_name']}...")
                 try:
                     existing_page_id, existing_page_url = find_existing_blogger_page(config, access_token, page_title, match["match_name"])
                     if existing_page_id:
-                        print(f"[*] Found existing stream Page. Updating ID: {existing_page_id}")
+                        print(f"[*] Found existing stream Page. ID: {existing_page_id}")
                         page_id = existing_page_id
-                        page_url = update_blogger_page(config, access_token, page_id, page_title, page_html)
+                        page_url = existing_page_url
+                        if refresh_existing and can_refresh:
+                            if args.dry_run:
+                                log_dry_run(f"Would refresh existing stream Page for {match['match_name']} ({page_id}).")
+                                changed = True
+                            else:
+                                page_url = update_blogger_page(config, access_token, page_id, page_title, page_html)
+                        else:
+                            print("[*] Existing stream Page content left unchanged.")
                     else:
-                        page_id, page_url = create_blogger_page(config, access_token, page_title, page_html)
-                    match["new_blogger_page_id"] = page_id
-                    match["new_blogger_page_url"] = page_url
-                    match["new_blog_iframe_set"] = False
-                    match["new_blog_prepare_set"] = False
-                    print(f"[+] Page ready. ID: {page_id} | URL: {page_url}")
-                    changed = True
+                        if args.dry_run:
+                            log_dry_run(f"Would create stream Page for {match['match_name']}.")
+                            changed = True
+                            page_id, page_url = "", ""
+                        else:
+                            page_id, page_url = create_blogger_page(config, access_token, page_title, page_html)
+                    if page_id and not args.dry_run:
+                        match["new_blogger_page_id"] = page_id
+                        match["new_blogger_page_url"] = page_url
+                        match["new_blog_iframe_set"] = False
+                        match["new_blog_prepare_set"] = False
+                        changed = True
+                    elif page_id:
+                        log_dry_run(f"Would record stream Page ID/URL for {match['match_name']}: {page_id} | {page_url}")
+                        changed = True
+                    if page_id:
+                        print(f"[+] Page ready. ID: {page_id} | URL: {page_url}")
                 except Exception as e:
                     print(f"[-] Page creation failed: {e}")
                     continue
             elif not can_refresh:
                 print(f"\n[*] Skipping stream Page refresh for active/live match: {match['match_name']}")
+            elif not refresh_existing:
+                print(f"\n[*] Existing stream Page left unchanged for: {match['match_name']} (ID: {page_id})")
             else:
                 print(f"\n[*] Refreshing existing stream Page for: {match['match_name']} (ID: {page_id})...")
                 try:
-                    page_url = update_blogger_page(config, access_token, page_id, page_title, page_html)
-                    match["new_blogger_page_url"] = page_url
-                    match["new_blog_iframe_set"] = False
-                    match["new_blog_prepare_set"] = False
-                    print(f"[+] Page content refreshed. URL: {page_url}")
-                    changed = True
+                    if args.dry_run:
+                        log_dry_run(f"Would refresh stream Page for {match['match_name']} ({page_id}).")
+                        changed = True
+                    else:
+                        page_url = update_blogger_page(config, access_token, page_id, page_title, page_html)
+                        match["new_blogger_page_url"] = page_url
+                        match["new_blog_iframe_set"] = False
+                        match["new_blog_prepare_set"] = False
+                        print(f"[+] Page content refreshed. URL: {page_url}")
+                        changed = True
                 except Exception as e:
                     print(f"[-] Page refresh failed: {e}")
 
@@ -741,15 +803,19 @@ def main():
             img_path = os.path.join(paths["thumbnails_dir"], img_filename)
             if not os.path.exists(img_path):
                 print(f"[*] Generating custom thumbnail for: {match['match_name']}...")
-                t1, t2 = split_teams(match["match_name"])
-                generate_thumbnail(
-                    t1,
-                    t2,
-                    match["match_time"],
-                    img_path,
-                    league=match.get("league") or match.get("competition") or config.get("default_league", ""),
-                    channel=get_channel_info(match, config),
-                )
+                if args.dry_run:
+                    log_dry_run(f"Would generate thumbnail: {img_path}")
+                    changed = True
+                else:
+                    t1, t2 = split_teams(match["match_name"])
+                    generate_thumbnail(
+                        t1,
+                        t2,
+                        match["match_time"],
+                        img_path,
+                        league=match.get("league") or match.get("competition") or config.get("default_league", ""),
+                        channel=get_channel_info(match, config),
+                    )
 
             # Step 3: Create or Refresh Blogger POST (Preview Post)
             post_title = preview_post_title(match)
@@ -757,36 +823,62 @@ def main():
             post_id = match.get("new_blogger_post_id")
             
             if not post_id:
-                print(f"[*] Creating preview Post for: {match['match_name']}...")
+                print(f"[*] Checking preview Post for: {match['match_name']}...")
                 try:
                     existing_post_id, existing_post_url = find_existing_blogger_post(config, access_token, post_title, match["match_name"])
                     if existing_post_id:
-                        print(f"[*] Found existing preview Post. Updating ID: {existing_post_id}")
+                        print(f"[*] Found existing preview Post. ID: {existing_post_id}")
                         post_id = existing_post_id
-                        post_url = update_blogger_post(config, access_token, post_id, post_title, post_html)
+                        post_url = existing_post_url
+                        if refresh_existing and can_refresh:
+                            if args.dry_run:
+                                log_dry_run(f"Would refresh existing preview Post for {match['match_name']} ({post_id}).")
+                                changed = True
+                            else:
+                                post_url = update_blogger_post(config, access_token, post_id, post_title, post_html)
+                        else:
+                            print("[*] Existing preview Post content left unchanged.")
                     else:
-                        post_id, post_url = create_blogger_post(config, access_token, post_title, post_html)
-                    match["new_blogger_post_id"] = post_id
-                    match["new_blogger_post_url"] = post_url
-                    print(f"[+] Post ready. ID: {post_id} | URL: {post_url}")
-                    changed = True
+                        if args.dry_run:
+                            log_dry_run(f"Would create preview Post for {match['match_name']}.")
+                            changed = True
+                            post_id, post_url = "", ""
+                        else:
+                            post_id, post_url = create_blogger_post(config, access_token, post_title, post_html)
+                    if post_id and not args.dry_run:
+                        match["new_blogger_post_id"] = post_id
+                        match["new_blogger_post_url"] = post_url
+                        changed = True
+                    elif post_id:
+                        log_dry_run(f"Would record preview Post ID/URL for {match['match_name']}: {post_id} | {post_url}")
+                        changed = True
+                    if post_id:
+                        print(f"[+] Post ready. ID: {post_id} | URL: {post_url}")
                 except Exception as e:
                     print(f"[-] Post creation failed: {e}")
             elif not can_refresh:
                 print(f"[*] Skipping preview Post refresh for active/live match: {match['match_name']}")
+            elif not refresh_existing:
+                print(f"[*] Existing preview Post left unchanged for: {match['match_name']} (ID: {post_id})")
             else:
                 print(f"[*] Refreshing existing preview Post for: {match['match_name']} (ID: {post_id})...")
                 try:
-                    post_url = update_blogger_post(config, access_token, post_id, post_title, post_html)
-                    match["new_blogger_post_url"] = post_url
-                    print(f"[+] Post content refreshed. URL: {post_url}")
-                    changed = True
+                    if args.dry_run:
+                        log_dry_run(f"Would refresh preview Post for {match['match_name']} ({post_id}).")
+                        changed = True
+                    else:
+                        post_url = update_blogger_post(config, access_token, post_id, post_title, post_html)
+                        match["new_blogger_post_url"] = post_url
+                        print(f"[+] Post content refreshed. URL: {post_url}")
+                        changed = True
                 except Exception as e:
                     print(f"[-] Post refresh failed: {e}")
 
-    if changed:
+    if changed and not args.dry_run:
         save_schedule(schedule, automation_config)
         print("\n[+] Done. Schedule file updated with daily Page and Post details.")
+    elif changed and args.dry_run:
+        print("\n[+] Dry run complete. Schedule was not saved.")
     else:
         print("\n[+] No actions needed. All preview posts/pages are up to date.")
 
