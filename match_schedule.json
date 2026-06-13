@@ -8,20 +8,88 @@
       "https://worldcup.epicsports.mobi/p/biggest-fifa-world-cup-stadiums-ever.html"
     ],
     "blogger_post_id": "3631972399031520883",
-    "status": "pending",
+    "status": "completed",
     "blogger_post_url": "https://qtwc2022.blogspot.com/p/world-cup-1.html",
     "iframe_embed_code": "<iframe src=\"https://qtwc2022.blogspot.com/p/world-cup-1.html\" width=\"100%\" height=\"480px\" frameborder=\"0\" allow=\"autoplay; encrypted-media; picture-in-picture\" allowfullscreen style=\"background:#000;\"></iframe>",
-    "last_run_time": "2026-06-12T19:07:08Z"
+    "last_run_time": "2026-06-12T21:55:14Z"
   },
   {
     "match_name": "USA vs Paraguay",
-    "match_time": "2026-06-13T01:00:00Z",
+    "match_time": "2026-06-13T02:52:00Z",
     "source_url": [
-      "https://www.rd9sports.pro/2026/06/usa-vs-paraguay.html",
+      "https://rd9.riddlearena.com/2026/06/usa-vs-para.html",
       "https://worldcup.epicsports.mobi/2026/06/usa-paraguay.html",
-      "https://90live.yallatvlive.com/2026/06/usa-vs-paraguay-live-score-preview.html"
+      "https://worldcup.epicsports.co.in/2026/06/usa-paraguay.html",
+      "https://es.footem.in/2026/06/usa-vs-paraguay.html",
+      "https://90live.yallatvlive.com/2026/06/usa-vs-paraguay-live-score-preview.html",
+      "https://www.rd9sports.pro/2026/06/usa-vs-paraguay.html"
     ],
     "blogger_post_id": "3631972399031520883",
-    "status": "pending"
+    "status": "pending",
+    "blogger_post_url": "https://qtwc2022.blogspot.com/p/world-cup-1.html",
+    "iframe_embed_code": "<iframe src=\"https://qtwc2022.blogspot.com/p/world-cup-1.html\" width=\"100%\" height=\"480px\" frameborder=\"0\" allow=\"autoplay; encrypted-media; picture-in-picture\" allowfullscreen style=\"background:#000;\"></iframe>",
+    "last_run_time": "2026-06-13T03:17:03Z"
+  },
+  {
+    "match_name": "Qater Vs Switz",
+    "match_time": "2026-06-13T19:00:00Z",
+    "source_url": [
+      "https://www.rd9sports.pro/2026/06/qater-vs-switz.html",
+      "https://rd9.riddlearena.com/2026/06/qater-vs-switz.html"
+    ],
+    "blogger_post_id": "2105928439373648663",
+    "status": "pending",
+    "blogger_post_url": "https://qtwc2022.blogspot.com/2026/06/qater-vs-switz-live-stream.html",
+    "iframe_embed_code": "<iframe src=\"https://qtwc2022.blogspot.com/2026/06/qater-vs-switz-live-stream.html\" width=\"100%\" height=\"480px\" frameborder=\"0\" allow=\"autoplay; encrypted-media; picture-in-picture\" allowfullscreen style=\"background:#000;\"></iframe>",
+    "last_run_time": "2026-06-13T01:00:00Z"
+  },
+  {
+    "match_name": "Scot Vs Haiti",
+    "match_time": "2026-06-14T01:00:00Z",
+    "source_url": [
+      "https://www.rd9sports.pro/2026/06/scot-vs-haiti.html",
+      "https://rd9.riddlearena.com/2026/06/scot-vs-haiti.html"
+    ],
+    "blogger_post_id": "233615338567774032",
+    "status": "pending",
+    "blogger_post_url": "https://qtwc2022.blogspot.com/2026/06/scot-vs-haiti-live-stream.html",
+    "iframe_embed_code": "<iframe src=\"https://qtwc2022.blogspot.com/2026/06/scot-vs-haiti-live-stream.html\" width=\"100%\" height=\"480px\" frameborder=\"0\" allow=\"autoplay; encrypted-media; picture-in-picture\" allowfullscreen style=\"background:#000;\"></iframe>",
+    "last_run_time": "2026-06-13T01:00:00Z"
+  },
+  {
+    "match_name": "Turk Vs Aus",
+    "match_time": "2026-06-14T01:00:00Z",
+    "source_url": [
+      "https://www.rd9sports.pro/2026/06/turk-vs-aus.html",
+      "https://rd9.riddlearena.com/2026/06/turk-vs-aus.html"
+    ],
+    "blogger_post_id": "2660378633820672483",
+    "status": "pending",
+    "blogger_post_url": "https://qtwc2022.blogspot.com/2026/06/turk-vs-aus-live-stream.html",
+    "iframe_embed_code": "<iframe src=\"https://qtwc2022.blogspot.com/2026/06/turk-vs-aus-live-stream.html\" width=\"100%\" height=\"480px\" frameborder=\"0\" allow=\"autoplay; encrypted-media; picture-in-picture\" allowfullscreen style=\"background:#000;\"></iframe>",
+    "last_run_time": "2026-06-13T01:00:00Z"
+  },
+  {
+    "match_name": "Brazil Vs Morocco",
+    "match_time": "2026-06-13T22:00:00Z",
+    "source_url": [
+      "https://www.rd9sports.pro/2026/06/brazil-vs-morocco.html",
+      "https://rd9.riddlearena.com/2026/06/brazil-vs-morocco.html"
+    ],
+    "blogger_post_id": "8344947705055235413",
+    "status": "pending",
+    "blogger_post_url": "https://qtwc2022.blogspot.com/2026/06/brazil-vs-morocco-live-stream.html",
+    "iframe_embed_code": "<iframe src=\"https://qtwc2022.blogspot.com/2026/06/brazil-vs-morocco-live-stream.html\" width=\"100%\" height=\"480px\" frameborder=\"0\" allow=\"autoplay; encrypted-media; picture-in-picture\" allowfullscreen style=\"background:#000;\"></iframe>",
+    "last_run_time": "2026-06-13T01:00:00Z"
+  },
+  {
+    "match_name": "Ipl Rr Vs Lsg",
+    "match_time": "2026-06-13T03:26:29Z",
+    "source_url": "https://www.90live.in/2024/03/ipl-rr-vs-lsg-preview-lineups-match.html",
+    "blogger_post_id": "6459274971528692339",
+    "status": "pending",
+    "blogger_post_url": "https://qtwc2022.blogspot.com/2026/06/ipl-rr-vs-lsg-live-stream.html",
+    "iframe_embed_code": "<iframe src=\"https://qtwc2022.blogspot.com/2026/06/ipl-rr-vs-lsg-live-stream.html\" width=\"100%\" height=\"480px\" frameborder=\"0\" allow=\"autoplay; encrypted-media; picture-in-picture\" allowfullscreen style=\"background:#000;\"></iframe>",
+    "last_run_time": "2026-06-13T03:21:25Z"
   }
 ]

@@ -112,31 +112,54 @@ def write_direct_links(match_name, post_url, player_html):
         
         # 2. HTML format (clean list of paragraph links similar to RD9 Sports, styled for dark backgrounds)
         html_lines = []
-        html_lines.append('<div style="font-family:\'Segoe UI\',Roboto,Helvetica,sans-serif; max-width:650px; margin: 15px auto;">')
+        html_lines.append('<div style="font-family:\'Segoe UI\',Roboto,Helvetica,sans-serif; max-width:650px; margin: 20px auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 10px;">')
         html_lines.append('  <style>')
         html_lines.append('    .stream-btn {')
-        html_lines.append('      display: inline-block;')
+        html_lines.append('      display: flex;')
+        html_lines.append('      flex-direction: column;')
+        html_lines.append('      align-items: center;')
+        html_lines.append('      justify-content: center;')
         html_lines.append('      width: 100%;')
         html_lines.append('      max-width: 550px;')
-        html_lines.append('      padding: 14px 20px;')
-        html_lines.append('      background: #161a22;')
-        html_lines.append('      color: #00a8ff;')
+        html_lines.append('      margin-bottom: 15px;')
+        html_lines.append('      padding: 16px 24px;')
+        html_lines.append('      background: linear-gradient(135deg, #e63946 0%, #b81d24 100%);')
+        html_lines.append('      color: #ffffff;')
         html_lines.append('      text-decoration: none;')
-        html_lines.append('      font-family: \'Segoe UI\', sans-serif;')
-        html_lines.append('      font-size: 15px;')
-        html_lines.append('      font-weight: bold;')
-        html_lines.append('      border-radius: 8px;')
-        html_lines.append('      border: 1px solid #232730;')
-        html_lines.append('      text-align: left;')
+        html_lines.append('      border-radius: 12px;')
+        html_lines.append('      border: 1px solid #ff4d5a;')
+        html_lines.append('      box-shadow: 0 4px 15px rgba(230, 57, 70, 0.3);')
         html_lines.append('      box-sizing: border-box;')
-        html_lines.append('      transition: all 0.2s ease-in-out;')
-        html_lines.append('      margin-bottom: 12px;')
+        html_lines.append('      transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);')
+        html_lines.append('      cursor: pointer;')
         html_lines.append('    }')
         html_lines.append('    .stream-btn:hover {')
-        html_lines.append('      background: #1f2430;')
-        html_lines.append('      border-color: #00a8ff;')
-        html_lines.append('      color: #fff;')
-        html_lines.append('      box-shadow: 0 4px 12px rgba(0, 168, 255, 0.2);')
+        html_lines.append('      background: linear-gradient(135deg, #ff4d5a 0%, #e63946 100%);')
+        html_lines.append('      border-color: #ff808b;')
+        html_lines.append('      transform: translateY(-2px);')
+        html_lines.append('      box-shadow: 0 8px 25px rgba(230, 57, 70, 0.5);')
+        html_lines.append('    }')
+        html_lines.append('    .stream-btn:active {')
+        html_lines.append('      transform: translateY(1px);')
+        html_lines.append('      box-shadow: 0 2px 10px rgba(230, 57, 70, 0.3);')
+        html_lines.append('    }')
+        html_lines.append('    .stream-title {')
+        html_lines.append('      font-size: 16px;')
+        html_lines.append('      font-weight: 700;')
+        html_lines.append('      letter-spacing: 0.5px;')
+        html_lines.append('      margin-bottom: 6px;')
+        html_lines.append('      text-transform: uppercase;')
+        html_lines.append('      color: #ffffff;')
+        html_lines.append('      text-shadow: 0 1px 2px rgba(0,0,0,0.2);')
+        html_lines.append('      text-align: center;')
+        html_lines.append('    }')
+        html_lines.append('    .stream-subtitle {')
+        html_lines.append('      font-size: 13px;')
+        html_lines.append('      font-weight: 600;')
+        html_lines.append('      color: #00ff88;')
+        html_lines.append('      letter-spacing: 0.5px;')
+        html_lines.append('      text-transform: uppercase;')
+        html_lines.append('      text-align: center;')
         html_lines.append('    }')
         html_lines.append('  </style>')
         
@@ -173,15 +196,20 @@ def write_direct_links(match_name, post_url, player_html):
             else:
                 lang = "ENG" # Default language
                 
-            # Construct button label starting with match name
-            btn_label = f"{match_name} — Link {idx + 1} | {quality} | {fmt} | {lang}"
+            # Construct button elements
+            title_text = f"{match_name} — Link {idx + 1}"
+            subtitle_text = f"{quality} • {fmt} • {lang}"
             
-            # Plain text
+            # Plain text representation
+            btn_label = f"{title_text} | {subtitle_text}"
             lines.append(f"{idx + 1}. {btn_label}")
             lines.append(f"   Link: {direct_url}\n")
             
-            # HTML anchor formatted like a button
-            html_lines.append(f'  <a class="stream-btn" href="{direct_url}" target="_blank">{btn_label}</a>')
+            # HTML anchor formatted like a button with title and subtitle
+            html_lines.append(f'  <a class="stream-btn" href="{direct_url}" target="_blank">')
+            html_lines.append(f'    <span class="stream-title">{title_text}</span>')
+            html_lines.append(f'    <span class="stream-subtitle">{subtitle_text}</span>')
+            html_lines.append(f'  </a>')
             
         html_lines.append("</div>")
         
@@ -201,6 +229,11 @@ def write_direct_links(match_name, post_url, player_html):
         with open(os.path.join("links", f"links_{safe_name}.html"), "w", encoding="utf-8") as f:
             f.write(html_content)
             
+        # Write full scraped link details (JSON format) to a separate folder
+        os.makedirs("scraped_details", exist_ok=True)
+        with open(os.path.join("scraped_details", f"{safe_name}_details.json"), "w", encoding="utf-8") as f:
+            json.dump(links_data, f, indent=2)
+            
         print(f"[+] Direct links list successfully written to plain text and HTML list files for {match_name}")
         print(content)
     except Exception as e:
@@ -211,8 +244,8 @@ last_discovery_time = 0
 def auto_discover_matches():
     global last_discovery_time
     now_ts = time.time()
-    # Run auto-discovery at startup and then every 1 hour (3600 seconds)
-    if last_discovery_time > 0 and (now_ts - last_discovery_time) < 3600:
+    # Run auto-discovery at startup and then every 3 minutes (180 seconds)
+    if last_discovery_time > 0 and (now_ts - last_discovery_time) < 180:
         return
         
     print("[*] Running auto-discovery for upcoming matches...")
@@ -222,12 +255,15 @@ def auto_discover_matches():
     config = load_json(CONFIG_FILE) or {}
     
     portals = config.get("auto_discover_portals", [
+        "https://www.rd9sports.online/?m=1",
+        "https://www.epicsports.in/",
+        "https://www.footem.site/",
+        "https://90live.in/",
         "https://www.rd9sports.pro/",
         "https://worldcup.epicsports.mobi/",
         "https://epicsports.mobi/",
         "http://footm.site/",
         "http://footem.site/",
-        "https://90live.in/",
         "https://www.90live.org/"
     ])
     
@@ -287,6 +323,14 @@ def auto_discover_matches():
                     existing_match = name_to_match[match_name_lower]
                     if existing_match.get("status") == "completed":
                         continue
+                    # Skip scanning portals if the match has already started
+                    try:
+                        match_time = parse_time(existing_match["match_time"])
+                        now_utc = datetime.now(timezone.utc)
+                        if now_utc >= match_time:
+                            continue
+                    except Exception:
+                        pass
                         
                     curr_url = existing_match["source_url"]
                     if isinstance(curr_url, list):
@@ -308,15 +352,28 @@ def auto_discover_matches():
                 except Exception:
                     m_html = ""
                     
-                # Extract date from page metadata
+                # Extract date from page text or metadata
                 base_date = None
-                time_match = re.search(r'<time[^>]*datetime=[\x27\"]([^\x27\"]+)[\x27\"]', m_html)
-                if time_match:
+                
+                # Check for DATE DD - MM - YYYY or DATE DD/MM/YYYY or similar patterns in the HTML text
+                date_match = re.search(r'(?i)\bdate\b\s*(?:info)?\s*[:\-\s]*(\d{1,2})\s*[\-\/]\s*(\d{1,2})\s*[\-\/]\s*(\d{4})', m_html)
+                if date_match:
                     try:
-                        base_date = datetime.fromisoformat(time_match.group(1))
+                        day = int(date_match.group(1))
+                        month = int(date_match.group(2))
+                        year = int(date_match.group(3))
+                        base_date = datetime(year, month, day)
                     except Exception:
                         pass
-                        
+                
+                if not base_date:
+                    time_match = re.search(r'<time[^>]*datetime=[\x27\"]([^\x27\"]+)[\x27\"]', m_html)
+                    if time_match:
+                        try:
+                            base_date = datetime.fromisoformat(time_match.group(1))
+                        except Exception:
+                            pass
+                            
                 if not base_date:
                     base_date = datetime.now(timezone.utc)
                     
@@ -418,12 +475,15 @@ def check_and_run():
             continue
 
         match_time = parse_time(match["match_time"])
-        # Active match window: 10 minutes before kickoff up to 3 hours after
-        run_start = match_time - timedelta(minutes=10)
+        # Active match window: 15 minutes before kickoff up to 3 hours after
+        run_start = match_time - timedelta(minutes=15)
         run_end = match_time + timedelta(hours=3)
 
         if run_start <= now <= run_end:
-            # Check if never run or was run more than 5 minutes ago
+            # Check if never run or needs recheck based on kickoff status:
+            # 1 minute interval before kickoff, 10 minutes interval after kickoff
+            cooldown_min = 1 if now < match_time else 10
+            
             last_run_str = match.get("last_run_time")
             should_run = False
             if not last_run_str:
@@ -431,7 +491,7 @@ def check_and_run():
             else:
                 try:
                     last_run_dt = parse_time(last_run_str)
-                    if now - last_run_dt >= timedelta(minutes=5):
+                    if now - last_run_dt >= timedelta(minutes=cooldown_min):
                         should_run = True
                 except Exception:
                     should_run = True

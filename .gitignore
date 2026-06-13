@@ -1,3 +1,11 @@
 __pycache__/
 *.pyc
 blogger_config.json
+scheduler.log
+*.log
+player.html
+players/
+scraped_details/
+links/
+streaming_report.txt
+urls.txt

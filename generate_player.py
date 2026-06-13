@@ -19,11 +19,27 @@ class EpicLinkParser(HTMLParser):
         self.current_tag = None
         self.current_attrs = {}
         self.current_text = []
+        self.open_tags = []  # Stack of tuples: (tag_name, is_ignored)
 
     def handle_starttag(self, tag, attrs):
+        attr_dict = dict(attrs)
+        is_ignored_container = False
+        if tag in ("aside", "header", "footer", "nav"):
+            is_ignored_container = True
+        else:
+            for attr_name in ("class", "id"):
+                if attr_name in attr_dict:
+                    val = attr_dict[attr_name].lower()
+                    if any(kw in val for kw in ("sidebar", "widget", "related", "popular", "menu", "navbar", "comment", "footer", "header")):
+                        if not ("blog" in val or "post" in val):
+                            is_ignored_container = True
+                            break
+        
+        self.open_tags.append((tag, is_ignored_container))
+            
         if tag in ("a", "button", "iframe"):
             self.current_tag = tag
-            self.current_attrs = dict(attrs)
+            self.current_attrs = attr_dict
             self.current_text = []
 
     def handle_data(self, data):
@@ -31,6 +47,15 @@ class EpicLinkParser(HTMLParser):
             self.current_text.append(data)
 
     def handle_endtag(self, tag):
+        # Determine if we are currently inside an ignored container BEFORE popping
+        is_in_ignored = any(is_ignored for _, is_ignored in self.open_tags)
+        
+        # Pop from open_tags stack
+        while self.open_tags:
+            popped_tag, _ = self.open_tags.pop()
+            if popped_tag == tag:
+                break
+                
         if tag == self.current_tag:
             text = "".join(self.current_text).strip()
             url = None
@@ -44,7 +69,7 @@ class EpicLinkParser(HTMLParser):
                 if match:
                     url = match.group(1) or match.group(2)
             
-            if url:
+            if url and not is_in_ignored:
                 resolved_url = urljoin(self.base_url, url)
                 self.results.append({
                     "text": text.replace("\n", " ").strip(),
@@ -503,6 +528,16 @@ input[type=range].vol-slider {
   .link-label { font-size: 12px; }
   .type-legend { display: none; }
 }
+@media (max-width: 768px) {
+  .main { padding: 8px 6px; }
+  .player-card { border-radius: 8px; }
+  .video-wrap { aspect-ratio: 16/9; }
+  .socials { gap: 8px; margin: 10px 0; }
+  .soc-btn { padding: 12px 16px; font-size: 13px; border-radius: 8px; }
+  .stream-link-item { padding: 9px 12px; }
+  .link-label { font-size: 12px; }
+  .badge { font-size: 9px; padding: 1px 5px; }
+}
 </style>
 </head>
 <body>
@@ -646,6 +681,29 @@ input[type=range].vol-slider {
     <script>
       window.addEventListener('load', function() {
         setTimeout(function() { document.getElementById('popup-ad-overlay').style.display = 'flex'; }, 3000);
+        
+        // Social Modal Popup Logic
+        const today = new Date().toDateString();
+        if (localStorage.getItem('seenSocialJoinPopup') !== today) {
+          setTimeout(function() {
+            const modal = document.getElementById('social-modal-overlay');
+            if (modal) modal.style.display = 'flex';
+          }, 5000);
+        }
+
+        const closeBtn = document.getElementById('close-social-modal');
+        const closeTextBtn = document.getElementById('close-social-modal-btn');
+        const modal = document.getElementById('social-modal-overlay');
+        
+        const closeModal = () => {
+          if (modal) {
+            modal.style.display = 'none';
+            localStorage.setItem('seenSocialJoinPopup', today);
+          }
+        };
+
+        if (closeBtn) closeBtn.addEventListener('click', closeModal);
+        if (closeTextBtn) closeTextBtn.addEventListener('click', closeModal);
       });
     </script>
   </div>
@@ -673,6 +731,38 @@ input[type=range].vol-slider {
   <div class="ad-bottom">
     <script src="https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js"></script>
   </div>
+
+  <!-- Telegram & WhatsApp Social Join Modal -->
+  <div id="social-modal-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:100000; justify-content:center; align-items:center; backdrop-filter: blur(4px); transition: all 0.3s ease;">
+    <div style="position:relative; background:#111118; border: 1px solid rgba(255,255,255,0.1); padding:24px; border-radius:16px; width:90%; max-width:440px; box-shadow:0 10px 30px rgba(0,0,0,0.5); text-align:center; animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);">
+      <button id="close-social-modal" style="position:absolute; top:12px; right:12px; background:rgba(255,255,255,0.06); color:#fff; border:none; border-radius:50%; width:28px; height:28px; font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background 0.2s;">&times;</button>
+      <h3 style="font-family:'Rajdhani',sans-serif; font-size:20px; font-weight:700; color:#fff; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">📢 Live Match Channels</h3>
+      <p style="font-size:13px; color:#aaa; line-height:1.5; margin-bottom:20px;">Join our communities to get instant live streaming links and match notifications daily!</p>
+      
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        <a href="#" onclick="goSomewhere(); document.getElementById('social-modal-overlay').style.display='none'; return false;" style="display:flex; align-items:center; justify-content:center; gap:10px; padding:14px 20px; border-radius:10px; font-size:15px; font-weight:700; text-decoration:none; color:#fff; font-family:'Rajdhani',sans-serif; text-transform:uppercase; letter-spacing:0.6px; background:linear-gradient(135deg, #25D366 0%, #128C7E 100%); transition:transform 0.2s, box-shadow 0.2s; box-shadow:0 4px 15px rgba(37,211,102,0.3);">
+          <svg style="width:18px; height:18px; fill:currentColor" viewBox="0 0 24 24">
+            <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.514 2.266 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.724-1.455L0 24zm6.59-4.846c1.66.986 3.298 1.448 5.355 1.449 5.883 0 10.675-4.76 10.677-10.606.002-2.833-1.107-5.498-3.127-7.52-2.02-2.022-4.704-3.136-7.54-3.137-5.887 0-10.683 4.761-10.686 10.61 0 2.235.632 4.04 1.766 5.887l-.999 3.647 3.854-.993zm11.381-4.708c-.307-.154-1.82-.899-2.102-1.002-.282-.102-.487-.154-.692.154-.205.308-.795 1.002-.974 1.205-.18.206-.36.23-.667.077-.307-.154-1.297-.477-2.472-1.528-.915-.817-1.533-1.828-1.713-2.136-.18-.308-.02-.475.134-.628.14-.137.307-.359.461-.54.154-.179.206-.308.308-.513.102-.206.051-.385-.026-.54-.077-.154-.692-1.67-.949-2.285-.25-.602-.503-.519-.692-.53l-.59-.011c-.205 0-.538.077-.82.385-.282.308-1.077 1.051-1.077 2.562 0 1.513 1.102 2.975 1.256 3.18 1.532 2.054 3.393 3.197 5.258 3.829 1.865.63 2.72.76 3.655.62.934-.14 2.102-.859 2.397-1.692.296-.834.296-1.547.207-1.693-.089-.147-.282-.25-.59-.404z"/>
+          </svg>
+          Join WhatsApp Group
+        </a>
+        <a href="#" onclick="telewhere(); document.getElementById('social-modal-overlay').style.display='none'; return false;" style="display:flex; align-items:center; justify-content:center; gap:10px; padding:14px 20px; border-radius:10px; font-size:15px; font-weight:700; text-decoration:none; color:#fff; font-family:'Rajdhani',sans-serif; text-transform:uppercase; letter-spacing:0.6px; background:linear-gradient(135deg, #0088cc 0%, #006699 100%); transition:transform 0.2s, box-shadow 0.2s; box-shadow:0 4px 15px rgba(0,136,204,0.3);">
+          <svg style="width:18px; height:18px; fill:currentColor" viewBox="0 0 24 24">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.11.02-1.93 1.23-5.46 3.62-.51.35-.98.53-1.4.52-.46-.01-1.35-.26-2.01-.48-.81-.27-1.46-.42-1.4-.88.03-.24.36-.49.98-.74 3.82-1.66 6.37-2.75 7.63-3.27 3.63-1.49 4.38-1.75 4.88-1.76.11 0 .35.03.51.16.13.11.17.26.19.37.02.13.02.26.01.39z"/>
+          </svg>
+          Join Telegram Group
+        </a>
+      </div>
+      <button id="close-social-modal-btn" style="margin-top:16px; background:none; border:none; color:#555; font-size:11px; cursor:pointer; text-decoration:underline;">No, thanks, close this</button>
+    </div>
+  </div>
+  <style>
+    @keyframes popIn {
+      from { transform: scale(0.9); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    #close-social-modal:hover { background: rgba(255,255,255,0.15) !important; }
+  </style>
 
 </div><!-- /main -->
 
@@ -943,7 +1033,7 @@ function showError(msg) {
     ovErr.classList.add('hidden');
     autoswitchTimeout = setTimeout(() => {
       switchStream(finalNextIdx);
-    }, 3000);
+    }, 1000);
   }
 }
 
@@ -1577,8 +1667,8 @@ def is_match_active(time_str):
     diff = dt - now
     diff_minutes = diff.total_seconds() / 60.0
     
-    # Active if starting within 10 minutes OR started up to 3 hours (180 minutes) ago
-    if -180.0 <= diff_minutes <= 10.0:
+    # Active if starting within 5 minutes OR started up to 3 hours (180 minutes) ago
+    if -180.0 <= diff_minutes <= 5.0:
         return True
     return False
 
@@ -2326,11 +2416,6 @@ def main():
                     s_type = "native"
                 else:
                     s_type = "iframe"
-                    
-                # Skip iframe embeds since they are not needed in the player
-                if s_type == "iframe":
-                    print(f"[-] Skipping iframe embed stream: {stream_url}")
-                    continue
                     
                 # Check if the stream link is responsive/active
                 if not is_stream_url_working(stream_url, s_type):
