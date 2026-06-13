@@ -948,8 +948,17 @@ def render_streaming_page(config, match, state="upcoming", links_html=""):
   </div>
 """
     if state == "live" and links_html:
+        post_url = match.get("blogger_post_url") or match.get("player_slot_url") or config.get("master_player_url") or ""
+        player_iframe = ""
+        if post_url:
+            player_iframe = f"""
+  <div id="player-frame-container" style="background:#000000; border-radius:12px; overflow:hidden; border:1px solid #cccccc; margin:18px 0; aspect-ratio:16/9; width:100%;">
+    <iframe src="{escape(post_url, quote=True)}" width="100%" height="100%" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="display:block; background:#000000; border:0;"></iframe>
+  </div>
+"""
         stream_block = f"""
-  <div id="player-frame-container" style="background:#ffffff; border:1px solid #cccccc; border-radius:6px; padding:12px; margin:18px 0; text-align:center;">
+  {player_iframe}
+  <div id="links-container" style="background:#ffffff; border:1px solid #cccccc; border-radius:6px; padding:12px; margin:18px 0; text-align:center;">
     <div style="font-weight:800; color:#006600; text-transform:uppercase; letter-spacing:.7px; margin-bottom:10px;">Live Stream Links</div>
     <div style="background:#eaffea; border:2px solid #00a651; border-radius:6px; color:#005a20; font-weight:900; margin:0 auto 14px; max-width:620px; padding:12px; text-transform:uppercase;">Match links added. Try Link 1 first, then switch if needed.</div>
     {links_html}
