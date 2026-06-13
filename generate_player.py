@@ -4,9 +4,15 @@ import re
 import sys
 import json
 import argparse
+import time
 import requests
+from datetime import datetime
 from urllib.parse import urljoin, urlparse, parse_qs
 from html.parser import HTMLParser
+from html import escape as html_escape
+
+from automation_config import get_player_blog_config, load_automation_config
+from pipeline_storage import ensure_runtime_dirs, load_schedule, storage_config
 
 # ----------------------------------------------------------------------
 # HTML Link Parser
@@ -98,7 +104,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.10/hls.min.js"></script>
 
 <!-- ======= AD HEAD CODE ======= -->
-<script src="https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js"></script>
+##PLAYER_HEAD_AD_CODE##
 
 <style>
 :root {
@@ -506,6 +512,33 @@ input[type=range].vol-slider {
     grid-template-columns: 1fr;
   }
 }
+.smartlink-wrap {
+  text-align: center;
+  margin: 14px 0 18px;
+}
+.smartlink-btn {
+  display: inline-block;
+  width: 100%;
+  max-width: 560px;
+  box-sizing: border-box;
+  background: #f4c430;
+  color: #111;
+  text-decoration: none;
+  padding: 13px 18px;
+  border-radius: 8px;
+  border: 1px solid #b98900;
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 800;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  animation: smart-pulse 1.8s infinite;
+}
+.smartlink-btn:hover { transform: translateY(-1px); opacity: 0.95; }
+@keyframes smart-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(244,196,48,0.55); }
+  70% { box-shadow: 0 0 0 10px rgba(244,196,48,0); }
+  100% { box-shadow: 0 0 0 0 rgba(244,196,48,0); }
+}
 .disclaimer {
   background: rgba(255,255,255,0.02);
   border: 1px solid var(--border);
@@ -555,7 +588,7 @@ input[type=range].vol-slider {
   Join our <a href="#" onclick="goSomewhere(); return false;">WhatsApp Group</a> for daily live links 👇
 </div>
 
-<div class="ad-top"><!-- TOP AD CODE HERE --></div>
+<div class="ad-top">##PLAYER_TOP_AD_CODE##</div>
 
 <div class="main">
 
@@ -653,6 +686,8 @@ input[type=range].vol-slider {
     </div>
   </div><!-- /player-card -->
 
+  ##PLAYER_SMARTLINK_BUTTON##
+
   <!-- ══ STREAM LINKS ── -->
   <div class="stream-links-section" id="links-section">
     <div class="stream-links-header">
@@ -667,28 +702,18 @@ input[type=range].vol-slider {
     <div class="stream-links-list" id="links-list"></div>
   </div>
 
-  <!-- Popup Ad -->
+  <!-- Player mid-page ad and social popup trigger -->
   <div class="ad-mid">
-    <div id="popup-ad-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:99999; justify-content:center; align-items:center;">
-      <div style="position:relative; background:#fff; padding:10px; border-radius:8px;">
-        <button onclick="document.getElementById('popup-ad-overlay').style.display='none'" style="position:absolute; top:-12px; right:-12px; background:#333; color:#fff; border:none; border-radius:50%; width:26px; height:26px; font-size:16px; cursor:pointer; line-height:1;">&times;</button>
-        <script>
-          atOptions = { 'key':'26752c18ca8361bba098d31342583042', 'format':'iframe', 'height':250, 'width':300, 'params':{} };
-        </script>
-        <script src="https://www.highperformanceformat.com/26752c18ca8361bba098d31342583042/invoke.js"></script>
-      </div>
-    </div>
+    ##PLAYER_MID_AD_CODE##
     <script>
       window.addEventListener('load', function() {
-        setTimeout(function() { document.getElementById('popup-ad-overlay').style.display = 'flex'; }, 3000);
-        
         // Social Modal Popup Logic
         const today = new Date().toDateString();
         if (localStorage.getItem('seenSocialJoinPopup') !== today) {
           setTimeout(function() {
             const modal = document.getElementById('social-modal-overlay');
             if (modal) modal.style.display = 'flex';
-          }, 5000);
+          }, ##PLAYER_SOCIAL_POPUP_DELAY_MS##);
         }
 
         const closeBtn = document.getElementById('close-social-modal');
@@ -729,7 +754,7 @@ input[type=range].vol-slider {
   </div>
 
   <div class="ad-bottom">
-    <script src="https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js"></script>
+    ##PLAYER_BOTTOM_AD_CODE##
   </div>
 
   <!-- Telegram & WhatsApp Social Join Modal -->
@@ -767,32 +792,21 @@ input[type=range].vol-slider {
 </div><!-- /main -->
 
 <script>
-var urls = [
-    'https://chat.whatsapp.com/E9UG7hmlObr61yTP1CjvAk',
-    'https://chat.whatsapp.com/KdNRt4WCQClLMmudKqe8Eg',
-    'https://chat.whatsapp.com/BfN4WNiLpjUJFtJbUys0nk',
-    'https://chat.whatsapp.com/Gm93HsMZDog9ExQ3KT9ED1',
-    'https://chat.whatsapp.com/CxQ3yYdEqGu0dC5mpaFKZY',
-    'https://chat.whatsapp.com/KmtHD4EPBe424XzohKqxSn',
-    'https://chat.whatsapp.com/C54sNsV9o3X8MMlYJLzCRC'
-];
+var urls = ##PLAYER_WHATSAPP_GROUPS_JSON##;
+var playerSocialClickTarget = ##PLAYER_SOCIAL_CLICK_TARGET_JSON##;
 
 function goSomewhere() {
+    if (!urls || !urls.length) return;
     var url = urls[Math.floor(Math.random()*urls.length)];
-    window.open(url, '_blank');
+    window.open(url, playerSocialClickTarget, 'noopener');
 }
 
-var urlss = [
-    'https://t.me/+43_hofAviBs4YWJl',
-    'https://t.me/+pbS2o7aYwe04N2Nl',
-    'https://t.me/+BRroGwpg2wJiZGZl',
-    'https://t.me/+ItWztH1Rb6MxNDU1',
-    'https://t.me/+3Xrk9OJsuT44YjQ1'
-];
+var urlss = ##PLAYER_TELEGRAM_CHANNELS_JSON##;
 
 function telewhere() {
+    if (!urlss || !urlss.length) return;
     var url = urlss[Math.floor(Math.random()*urlss.length)];
-    window.open(url, '_blank');
+    window.open(url, playerSocialClickTarget, 'noopener');
 }
 
 function initPlayerSystem() {
@@ -1330,10 +1344,6 @@ function initPlayer(url, typeOverride) {
 /* ═══════════════════════════════════════════════════════════════
    VIDEO EVENTS
 ═══════════════════════════════════════════════════════════════ */
-function unmuteAndPlay() {
-  video.muted = false; video.volume = 1;
-  volSlider.value = 1; updateVolIcon();
-}
 function updateVolIcon() {
   const muted = video.muted || video.volume == 0;
   icoVol.style.display  = muted ? 'none'  : 'block';
@@ -1348,7 +1358,6 @@ video.addEventListener('playing', () => {
   ovLoad.classList.add('hidden');
   ovErr.classList.add('hidden');
   setStatus('live', 'Stream live');
-  unmuteAndPlay();
   if (!shakaPlayer && !hlsInstance) {
     setEngineBadge('native');
     setEngineTry('native', 'success');
@@ -1449,7 +1458,7 @@ const BADGE_LABELS = {
 
 function buildLinks() {
   linksList.innerHTML = '';
-  STREAM_LINKS.slice(0, 7).forEach((lnk, i) => {
+  STREAM_LINKS.forEach((lnk, i) => {
     const row = document.createElement('div');
     row.className = 'stream-link-item' + (!lnk.url ? ' disabled' : '');
     row.dataset.index = i;
@@ -1544,21 +1553,7 @@ if (paramLink) {
 function bootstrapPlayer() {
   const l = document.getElementById('links-list');
   const v = document.getElementById('video');
-  
-  let diag = document.getElementById('diag-debug');
-  if (!diag) {
-    diag = document.createElement('div');
-    diag.id = 'diag-debug';
-    diag.style = 'background:yellow; color:black; padding:10px; position:fixed; top:0; left:0; z-index:9999999; font-size:12px; font-family:monospace; border:1px solid #000;';
-    document.body.appendChild(diag);
-  }
-  diag.innerHTML = 'Debug — LinksList: ' + (l ? 'FOUND' : 'NULL') + ' | Video: ' + (v ? 'FOUND' : 'NULL');
-
   if (l && v) {
-    diag.innerHTML += ' => Initializing...';
-    setTimeout(() => {
-      if (diag) diag.style.display = 'none'; // hide debug banner after successful init
-    }, 2000);
     initPlayerSystem();
   } else {
     setTimeout(bootstrapPlayer, 100);
@@ -1568,6 +1563,75 @@ bootstrapPlayer();
 </script>
 </body>
 </html>"""
+
+DEFAULT_PLAYER_AD_SCRIPT = '<script src="https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js"></script>'
+
+
+def player_ad_code(player_config, key, default=""):
+    ads = player_config.get("ads") or {}
+    return ads.get(key) or default
+
+
+def render_player_smartlink(player_config):
+    smartlink = player_config.get("smartlink") or {}
+    if smartlink.get("enabled") is False:
+        return ""
+    url = str(smartlink.get("url") or "").strip()
+    if not url:
+        return ""
+    text = str(smartlink.get("text") or "Continue To Live Coverage").strip()
+    return (
+        '<div class="smartlink-wrap">'
+        f'<a class="smartlink-btn" href="{html_escape(url, quote=True)}" target="_blank" rel="noopener">'
+        f'{html_escape(text)}</a></div>'
+    )
+
+
+def render_player_html(stream_links_js, player_config=None):
+    if player_config is None:
+        player_config = get_player_blog_config(load_automation_config())
+
+    replacements = {
+        "##STREAM_LINKS_PLACEHOLDER##": stream_links_js,
+        "##PLAYER_HEAD_AD_CODE##": player_ad_code(player_config, "head_script", DEFAULT_PLAYER_AD_SCRIPT),
+        "##PLAYER_TOP_AD_CODE##": player_ad_code(player_config, "top_html", ""),
+        "##PLAYER_MID_AD_CODE##": player_ad_code(player_config, "mid_html", ""),
+        "##PLAYER_BOTTOM_AD_CODE##": player_ad_code(player_config, "bottom_script", DEFAULT_PLAYER_AD_SCRIPT),
+        "##PLAYER_SMARTLINK_BUTTON##": render_player_smartlink(player_config),
+        "##PLAYER_WHATSAPP_GROUPS_JSON##": json.dumps(player_config.get("whatsapp_groups") or []),
+        "##PLAYER_TELEGRAM_CHANNELS_JSON##": json.dumps(player_config.get("telegram_channels") or []),
+        "##PLAYER_SOCIAL_CLICK_TARGET_JSON##": json.dumps(player_config.get("social_click_target") or "_blank"),
+        "##PLAYER_SOCIAL_POPUP_DELAY_MS##": str(int(player_config.get("social_popup_delay_ms") or 5000))
+    }
+
+    output = HTML_TEMPLATE
+    for placeholder, value in replacements.items():
+        output = output.replace(placeholder, value)
+    return output
+
+
+def write_crawl_diagnostics(output_path, root_urls, all_results, resolved_items):
+    try:
+        base_name = os.path.basename(output_path)
+        if base_name.endswith(".html"):
+            base_name = base_name[:-5]
+        paths = ensure_runtime_dirs(load_automation_config())
+        os.makedirs(paths["diagnostics_dir"], exist_ok=True)
+        diagnostics_path = os.path.abspath(os.path.join(paths["diagnostics_dir"], f"{base_name}_crawl.json"))
+        diagnostics = {
+            "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "root_urls": root_urls,
+            "source_result_count": len(all_results),
+            "resolved_stream_count": len(resolved_items),
+            "results": all_results,
+            "resolved_items": resolved_items
+        }
+        with open(diagnostics_path, "w", encoding="utf-8") as f:
+            json.dump(diagnostics, f, indent=2)
+        print(f"[+] Crawl diagnostics written to: {diagnostics_path}")
+    except Exception as e:
+        print(f"[-] Warning: Failed to write crawl diagnostics: {e}")
+
 
 # ----------------------------------------------------------------------
 # Crawler Logic
@@ -1673,13 +1737,24 @@ def is_match_active(time_str):
     return False
 
 def extract_match_name(text_or_url):
+    text_or_url = str(text_or_url or "")
+    if text_or_url.startswith("http"):
+        parsed = urlparse(text_or_url)
+        text_or_url = parsed.path
+    text_or_url = re.sub(r"/\d{4}/\d{1,2}/", " ", text_or_url)
+    text_or_url = re.sub(r"\.(?:html?|php|asp|jsp)\b", " ", text_or_url, flags=re.IGNORECASE)
+    text_or_url = text_or_url.replace("-", " ").replace("_", " ").replace("/", " ")
+    text_or_url = re.sub(r"\b(?:19|20)\d{2}\b|\b\d{1,2}\b", " ", text_or_url)
+    text_or_url = re.sub(r"\s+", " ", text_or_url).strip()
+
     # Match strings like Spain vs Peru or France v Northern Ireland
     match = re.search(r'([a-zA-Z0-9\s\.\-]+?\s+(?:vs|v\.?)\s+[a-zA-Z0-9\s\.\-]+)', text_or_url, re.IGNORECASE)
     if match:
         name = match.group(1).strip()
         # Clean up double spaces, trailing words
         name = re.sub(r'\s+', ' ', name)
-        name = re.sub(r'(?i)\b(live|score|preview|lineup|telecast|details|stream|free|online|watch|hd|sd|link)\b.*', '', name).strip()
+        name = re.sub(r'(?i)^(?:footem\s+in|epicsports|rd9sports|worldcup|90live|live)\s+', '', name).strip()
+        name = re.sub(r'(?i)\b(live|score|preview|prediction|predictions|lineup|telecast|details|stream|free|online|watch|hd|sd|link)\b.*', '', name).strip()
         return name
     return None
 
@@ -2034,24 +2109,123 @@ def extract_final_stream_details(tree):
         "type": stream_type
     }
 
-def is_stream_url_working(url, stream_type):
+def parse_manifest_quality(text, stream_type):
+    quality = {"height": None, "bandwidth": None}
+    if not text:
+        return quality
+
+    if stream_type == "hls":
+        heights = [int(v) for v in re.findall(r"RESOLUTION=\d+x(\d+)", text, re.IGNORECASE)]
+        bandwidths = [int(v) for v in re.findall(r"BANDWIDTH=(\d+)", text, re.IGNORECASE)]
+        if heights:
+            quality["height"] = max(heights)
+        if bandwidths:
+            quality["bandwidth"] = max(bandwidths)
+    elif stream_type == "dash":
+        heights = [int(v) for v in re.findall(r"\bheight=[\"'](\d+)[\"']", text, re.IGNORECASE)]
+        bandwidths = [int(v) for v in re.findall(r"\bbandwidth=[\"'](\d+)[\"']", text, re.IGNORECASE)]
+        if heights:
+            quality["height"] = max(heights)
+        if bandwidths:
+            quality["bandwidth"] = max(bandwidths)
+    return quality
+
+
+def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, status_code=None):
+    base = {
+        "hls": 340,
+        "dash": 310,
+        "native": 260,
+        "iframe": 190,
+    }.get(stream_type, 120)
+
+    if height:
+        if height >= 1080:
+            base += 80
+        elif height >= 720:
+            base += 55
+        elif height >= 480:
+            base += 25
+    elif bandwidth:
+        if bandwidth >= 5000000:
+            base += 70
+        elif bandwidth >= 2500000:
+            base += 45
+        elif bandwidth >= 1000000:
+            base += 20
+
+    if stream_type in ("hls", "native"):
+        base += 25  # smartphone-friendly tie breaker
+    if status_code in (301, 302, 307, 308):
+        base -= 10
+    if latency_ms is not None:
+        base -= min(int(latency_ms / 100), 60)
+    return base
+
+
+def probe_stream_url(url, stream_type):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://www.rd9sports.pro/"
     }
-    # Skip checking if url is clearly not an HTTP link
+    result = {
+        "working": False,
+        "status_code": None,
+        "latency_ms": None,
+        "height": None,
+        "bandwidth": None,
+        "score": 0,
+        "error": "",
+    }
     if not url.startswith("http"):
-        return False
+        result["error"] = "non-http-url"
+        return result
     try:
-        # Check HTTP connectivity using a fast GET request with stream=True
-        r = requests.get(url, headers=headers, timeout=4, stream=True)
-        if r.status_code in (200, 206, 301, 302, 307, 308):
-            return True
-        print(f"[-] Stream URL validation failed for {url} with status {r.status_code}")
-        return False
+        started = time.monotonic()
+        r = requests.get(url, headers=headers, timeout=6, stream=True, allow_redirects=True)
+        result["latency_ms"] = int((time.monotonic() - started) * 1000)
+        result["status_code"] = r.status_code
+        ok_statuses = (200, 206, 301, 302, 307, 308)
+        if stream_type == "iframe":
+            ok_statuses = ok_statuses + (401, 403)
+        if r.status_code not in ok_statuses:
+            result["error"] = f"http-{r.status_code}"
+            print(f"[-] Stream URL validation failed for {url} with status {r.status_code}")
+            return result
+
+        manifest_text = ""
+        if stream_type in ("hls", "dash"):
+            chunks = []
+            total = 0
+            for chunk in r.iter_content(chunk_size=8192):
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total >= 200000:
+                    break
+            manifest_text = b"".join(chunks).decode("utf-8", errors="ignore")
+        r.close()
+
+        quality = parse_manifest_quality(manifest_text, stream_type)
+        result.update(quality)
+        result["working"] = True
+        result["score"] = score_stream_probe(
+            stream_type,
+            result["latency_ms"],
+            height=result["height"],
+            bandwidth=result["bandwidth"],
+            status_code=result["status_code"],
+        )
+        return result
     except Exception as e:
+        result["error"] = str(e)
         print(f"[-] Stream URL validation failed for {url} with exception: {e}")
-        return False
+        return result
+
+
+def is_stream_url_working(url, stream_type):
+    return probe_stream_url(url, stream_type).get("working", False)
 
 def process_root_url(root_url, max_depth=2):
     print(f"\n[*] STEP 1: Scraping page for stream links: {root_url}")
@@ -2417,8 +2591,9 @@ def main():
                 else:
                     s_type = "iframe"
                     
-                # Check if the stream link is responsive/active
-                if not is_stream_url_working(stream_url, s_type):
+                # Check if the stream link is responsive/active and collect ranking data.
+                probe = probe_stream_url(stream_url, s_type)
+                if not probe.get("working"):
                     print(f"[-] Skipping dead/unresponsive stream URL: {stream_url}")
                     continue
 
@@ -2455,6 +2630,11 @@ def main():
                     meta_parts.append(s_type.upper())
                     
                 meta_parts.append("Auto Quality")
+
+                if probe.get("height"):
+                    meta_parts.append(f"{probe['height']}p")
+                if probe.get("latency_ms") is not None:
+                    meta_parts.append(f"{probe['latency_ms']} ms")
                 
                 if "eng" in badges:
                     meta_parts.append("English Audio")
@@ -2472,10 +2652,12 @@ def main():
                     "stream_type": s_type,
                     "clear_keys": s_keys,
                     "badges": badges,
-                    "meta_parts": meta_parts
+                    "meta_parts": meta_parts,
+                    "probe": probe,
+                    "score": probe.get("score", 0)
                 })
 
-        # Sort resolved streams stably: DASH (0) -> HLS (1) -> Native (2) -> Iframe/Embed (3) -> Unknown (4)
+        # Sort resolved streams by measured score first, then stable type priority.
         def get_type_priority(item):
             t = item["stream_type"]
             if t == "dash":
@@ -2488,7 +2670,7 @@ def main():
                 return 3
             return 4
 
-        resolved_items.sort(key=get_type_priority)
+        resolved_items.sort(key=lambda item: (-int(item.get("score") or 0), get_type_priority(item)))
         resolved_items = resolved_items[:20]
 
         # Label and build the final STREAM_LINKS array
@@ -2522,18 +2704,23 @@ def main():
                 "meta": meta_str,
                 "badges": badges,
                 "type": stream_type,
-                "url": stream_url
+                "url": stream_url,
+                "score": item.get("score", 0),
+                "latencyMs": (item.get("probe") or {}).get("latency_ms"),
+                "height": (item.get("probe") or {}).get("height")
             }
             if clear_keys:
                 js_obj["clearKeys"] = clear_keys
                 
             stream_links_js.append(js_obj)
             
+        write_crawl_diagnostics(args.output, expanded_root_urls, all_results, resolved_items)
+
         # Serialize Python dictionary to JavaScript array format
         js_array_str = "const STREAM_LINKS = " + json.dumps(stream_links_js, indent=2) + ";"
         
-        # Replace placeholder inside HTML Template
-        output_html = HTML_TEMPLATE.replace("##STREAM_LINKS_PLACEHOLDER##", js_array_str)
+        # Inject stream links plus master-configured ads/social/smartlink into the player template.
+        output_html = render_player_html(js_array_str)
         
         # Write output HTML file
         try:
@@ -2552,22 +2739,21 @@ def main():
                     base_name = base_name[7:]
                 match_name = base_name.replace("_", " ").title()
                 
-                # Fetch blogger post URL from match_schedule.json if available
+                # Fetch blogger post URL from active schedule if available.
                 blogger_url = "https://qtwc2022.blogspot.com/p/world-cup-1.html"
                 try:
-                    with open("match_schedule.json", "r", encoding="utf-8") as s_file:
-                        sched = json.load(s_file)
-                        for m in sched:
-                            m_n = m.get("match_name", "").lower().strip()
-                            if m_n == match_name.lower().strip() or m_n.replace(" ", "_") == base_name:
-                                if m.get("blogger_post_url"):
-                                    blogger_url = m["blogger_post_url"]
-                                    break
+                    sched = load_schedule(load_automation_config())
+                    for m in sched:
+                        m_n = m.get("match_name", "").lower().strip()
+                        if m_n == match_name.lower().strip() or m_n.replace(" ", "_") == base_name:
+                            if m.get("blogger_post_url"):
+                                blogger_url = m["blogger_post_url"]
+                                break
                 except Exception:
                     pass
                     
                 from match_scheduler import write_direct_links
-                write_direct_links(match_name, blogger_url, output_html)
+                write_direct_links(match_name, blogger_url, output_html, load_automation_config())
             except Exception as e:
                 print(f"[-] Warning: Failed to auto-generate direct links list file: {e}")
         except Exception as e:

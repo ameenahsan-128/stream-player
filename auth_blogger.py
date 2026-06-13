@@ -27,25 +27,43 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"<html><body><h1>Authorization Failed</h1><p>No code parameter found in request.</p></body></html>")
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Authorize Blogger OAuth")
+    parser.add_argument("--config", default="blogger_config.json", help="Path to configuration JSON file")
+    parser.add_argument("--master-section", choices=["player_blog", "portal_blog"], help="Write credentials into this section of master_config.json")
+    parser.add_argument("--no-force-consent", action="store_true", help="Do not force the Google consent screen.")
+    args = parser.parse_args()
+    
+    global CONFIG_FILE
+    CONFIG_FILE = args.config
+
     if not os.path.exists(CONFIG_FILE):
         print(f"[-] Config file '{CONFIG_FILE}' not found. Initializing generic config...")
-        config = {
-            "blog_id": "",
-            "post_id": "",
-            "client_id": "",
-            "client_secret": "",
-            "refresh_token": ""
-        }
+        if args.master_section:
+            default_blog_id = "4927968984731236030" if args.master_section == "portal_blog" else ""
+            config = {args.master_section: {"blog_id": default_blog_id, "client_id": "", "client_secret": "", "refresh_token": ""}}
+        else:
+            config = {
+                "blog_id": "",
+                "client_id": "",
+                "client_secret": "",
+                "refresh_token": ""
+            }
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
     else:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.load(f)
 
+    target_config = config
+    if args.master_section:
+        config.setdefault(args.master_section, {})
+        target_config = config[args.master_section]
+
     # Prompt user for client_id and client_secret if not present
-    client_id = config.get("client_id") or ""
-    client_secret = config.get("client_secret") or ""
-    blog_id = config.get("blog_id") or ""
+    client_id = target_config.get("client_id") or ""
+    client_secret = target_config.get("client_secret") or ""
+    blog_id = target_config.get("blog_id") or ""
 
     if not client_id or client_id.startswith("YOUR_"):
         client_id = input("[?] Enter your Google Client ID: ").strip()
@@ -55,14 +73,15 @@ def main():
         blog_id = input("[?] Enter your Blogger Blog ID (can find in blogger dashboard URL): ").strip()
 
     # Save initial inputs
-    config["client_id"] = client_id
-    config["client_secret"] = client_secret
-    config["blog_id"] = blog_id
+    target_config["client_id"] = client_id
+    target_config["client_secret"] = client_secret
+    target_config["blog_id"] = blog_id
     
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
     # Build OAuth URL
+    consent_param = "" if args.no_force_consent else "&prompt=consent"
     auth_url = (
         "https://accounts.google.com/o/oauth2/v2/auth?"
         "scope=https://www.googleapis.com/auth/blogger&"
@@ -71,6 +90,7 @@ def main():
         "response_type=code&"
         f"redirect_uri={urllib.parse.quote(REDIRECT_URI)}&"
         f"client_id={client_id}"
+        f"{consent_param}"
     )
 
     print("\n" + "="*70)
@@ -121,7 +141,7 @@ def main():
         if "access_token" in res_json:
             print("[+] Access token received, but refresh token is missing.")
     else:
-        config["refresh_token"] = refresh_token
+        target_config["refresh_token"] = refresh_token
         print("[+] Refresh token retrieved successfully!")
         
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:

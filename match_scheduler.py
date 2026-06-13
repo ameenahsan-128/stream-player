@@ -7,10 +7,77 @@ import subprocess
 from datetime import datetime, timezone, timedelta
 import requests
 import re
-from urllib.parse import urlparse, urljoin
+import fcntl
+from urllib.parse import urlparse, urljoin, urlunparse
+
+from automation_config import (
+    get_player_blog_config,
+    get_player_slots,
+    get_portal_blog_config,
+    get_scheduler_config,
+    has_oauth,
+    load_automation_config,
+)
+from pipeline_storage import (
+    archive_completed_matches,
+    ensure_runtime_dirs,
+    load_schedule,
+    match_key,
+    save_schedule,
+    storage_config,
+)
+from portal_renderer import parse_match_time, render_streaming_page, slugify_match_name, streaming_page_title
+from precreate_posts import create_blogger_page, find_existing_blogger_page, update_blogger_page
 
 SCHEDULE_FILE = "match_schedule.json"
 CONFIG_FILE = "blogger_config.json"
+SCHEDULER_STATE_FILE = "scheduler_state.json"
+
+# Default goforsports.net ad script codes
+DEFAULT_AD_TOP = """
+<div align="center" style="margin: 15px 0;">
+  <script type="text/javascript">
+    atOptions = {
+      'key' : '26752c18ca8361bba098d31342583042',
+      'format' : 'iframe',
+      'height' : 250,
+      'width' : 300,
+      'params' : {}
+    };
+  </script>
+  <script type="text/javascript" src="https://www.highperformanceformat.com/26752c18ca8361bba098d31342583042/invoke.js"></script>
+</div>
+"""
+
+DEFAULT_AD_POPUP = """
+<!--Popup Ad Overlay-->
+<div id="popup-ad-overlay" style="align-items: center; background: rgba(0, 0, 0, 0.6); display: none; height: 100%; justify-content: center; left: 0px; position: fixed; top: 0px; width: 100%; z-index: 99999;">
+  <div style="background: rgb(255, 255, 255); border-radius: 8px; padding: 10px; position: relative;">
+    <button onclick="document.getElementById('popup-ad-overlay').style.display='none'" style="background: rgb(51, 51, 51); border: none; color: white; cursor: pointer; font-size: 16px; height: 26px; line-height: 1; position: absolute; right: -12px; top: -12px; width: 26px; border-radius: 50%;">&times;</button>
+    <script type="text/javascript">
+      atOptions = {
+        'key' : '26752c18ca8361bba098d31342583042',
+        'format' : 'iframe',
+        'height' : 250,
+        'width' : 300,
+        'params' : {}
+      };
+    </script>
+    <script type="text/javascript" src="https://www.highperformanceformat.com/26752c18ca8361bba098d31342583042/invoke.js"></script>
+  </div>
+</div>
+<script type="text/javascript">
+  window.addEventListener('load', function() {
+    setTimeout(function() {
+      const overlay = document.getElementById('popup-ad-overlay');
+      if (overlay) overlay.style.display = 'flex';
+    }, 3000);
+  });
+</script>
+<script type="text/javascript" src="https://throughalivemedication.com/45/96/a9/4596a9a27ac7c137dd494fd1f200edbb.js"></script>
+<script type="text/javascript" src="https://pl17973087.effectivecpmnetwork.com/45/96/a9/4596a9a27ac7c137dd494fd1f200edbb.js"></script>
+<script type="text/javascript" src="https://pl17973277.effectivecpmnetwork.com/66/f1/17/66f11775fe2744312299821ac71b38f1.js"></script>
+"""
 
 def load_json(filepath):
     if not os.path.exists(filepath):
@@ -19,8 +86,20 @@ def load_json(filepath):
         return json.load(f)
 
 def save_json(filepath, data):
+    parent = os.path.dirname(os.path.abspath(filepath))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
+
+def load_scheduler_state(config=None):
+    state = load_json(storage_config(config).get("runtime_state_file"))
+    return state if isinstance(state, dict) else {}
+
+
+def save_scheduler_state(state, config=None):
+    save_json(storage_config(config).get("runtime_state_file"), state)
 
 def get_access_token(config):
     url = "https://oauth2.googleapis.com/token"
@@ -92,11 +171,9 @@ def create_blogger_post(config, access_token, title, html_content):
     return res_data.get("id"), res_data.get("url")
 
 def parse_time(time_str):
-    if time_str.endswith("Z"):
-        time_str = time_str[:-1] + "+00:00"
-    return datetime.fromisoformat(time_str)
+    return parse_match_time(time_str)
 
-def write_direct_links(match_name, post_url, player_html):
+def write_direct_links(match_name, post_url, player_html, config=None):
     # Regex to extract the STREAM_LINKS list
     match_data = re.search(r'const STREAM_LINKS\s*=\s*(\[.*?\]);', player_html, re.DOTALL)
     if not match_data:
@@ -224,14 +301,15 @@ def write_direct_links(match_name, post_url, player_html):
         content = "\n".join(lines)
         
         # Write only the match-name HTML format as requested
-        os.makedirs("links", exist_ok=True)
-        safe_name = match_name.replace(' ', '_').lower()
-        with open(os.path.join("links", f"links_{safe_name}.html"), "w", encoding="utf-8") as f:
+        paths = ensure_runtime_dirs(config or load_automation_config())
+        os.makedirs(paths["links_dir"], exist_ok=True)
+        safe_name = slugify_match_name(match_name)
+        with open(os.path.join(paths["links_dir"], f"links_{safe_name}.html"), "w", encoding="utf-8") as f:
             f.write(html_content)
             
         # Write full scraped link details (JSON format) to a separate folder
-        os.makedirs("scraped_details", exist_ok=True)
-        with open(os.path.join("scraped_details", f"{safe_name}_details.json"), "w", encoding="utf-8") as f:
+        os.makedirs(paths["diagnostics_dir"], exist_ok=True)
+        with open(os.path.join(paths["diagnostics_dir"], f"{safe_name}_details.json"), "w", encoding="utf-8") as f:
             json.dump(links_data, f, indent=2)
             
         print(f"[+] Direct links list successfully written to plain text and HTML list files for {match_name}")
@@ -239,33 +317,290 @@ def write_direct_links(match_name, post_url, player_html):
     except Exception as e:
         print(f"[-] Error writing direct links list: {e}")
 
+
+def extract_stream_links(player_html):
+    match_data = re.search(r'const STREAM_LINKS\s*=\s*(\[.*?\]);', player_html, re.DOTALL)
+    if not match_data:
+        return []
+    try:
+        links = json.loads(match_data.group(1))
+    except Exception:
+        return []
+    return [link for link in links if link.get("url")]
+
+
+def links_html_path(match_name, config=None):
+    return os.path.join(storage_config(config).get("links_dir"), f"links_{slugify_match_name(match_name)}.html")
+
+
+def read_links_html(match_name, config=None):
+    path = links_html_path(match_name, config)
+    if not os.path.exists(path):
+        return ""
+    with open(path, "r", encoding="utf-8") as lf:
+        return lf.read()
+
+
+def active_window(match, scheduler_config):
+    match_time = parse_time(match["match_time"])
+    start_offset = int(scheduler_config.get("active_window_start_minutes", 15))
+    end_hours = int(scheduler_config.get("active_window_end_hours", 3))
+    return match_time - timedelta(minutes=start_offset), match_time + timedelta(hours=end_hours), match_time
+
+
+def occupied_player_slots(schedule, current_match, now, scheduler_config):
+    occupied = set()
+    for other in schedule:
+        if other is current_match or other.get("status") == "completed":
+            continue
+        slot_id = other.get("player_slot_id")
+        if not slot_id:
+            continue
+        try:
+            run_start, run_end, _ = active_window(other, scheduler_config)
+        except Exception:
+            continue
+        if run_start <= now <= run_end:
+            occupied.add(slot_id)
+    return occupied
+
+
+def select_player_slot(match, schedule, slots, now, scheduler_config):
+    if not slots:
+        return None
+    slot_by_id = {slot["id"]: slot for slot in slots}
+    current_slot_id = match.get("player_slot_id")
+    if current_slot_id in slot_by_id:
+        return slot_by_id[current_slot_id]
+
+    occupied = occupied_player_slots(schedule, match, now, scheduler_config)
+    for slot in slots:
+        if slot["id"] not in occupied:
+            return slot
+    return None
+
+
+def update_portal_match_page(new_config, new_token, match, state, links_html=""):
+    title = streaming_page_title(match)
+    page_html = render_streaming_page(new_config, match, state=state, links_html=links_html)
+    page_id = str(match.get("new_blogger_page_id") or "").strip()
+    if page_id and not page_id.startswith("YOUR_"):
+        print(f"[*] Updating portal Page {page_id} as state={state}...")
+        page_url = update_blogger_page(new_config, new_token, page_id, title, page_html)
+    else:
+        print("[*] Portal Page ID missing; searching or creating the canonical streaming Page...")
+        found_id, _ = find_existing_blogger_page(new_config, new_token, title, match["match_name"])
+        if found_id:
+            page_id = found_id
+            page_url = update_blogger_page(new_config, new_token, page_id, title, page_html)
+        else:
+            page_id, page_url = create_blogger_page(new_config, new_token, title, page_html)
+        match["new_blogger_page_id"] = page_id
+
+    match["new_blogger_page_url"] = page_url
+    return page_url
+
 last_discovery_time = 0
 
-def auto_discover_matches():
+MATCH_ALIASES = {
+    "qat": "qatar",
+    "qater": "qatar",
+    "switz": "switzerland",
+    "switzrlnd": "switzerland",
+    "swi": "switzerland",
+    "scot": "scotland",
+    "scotlnd": "scotland",
+    "sco": "scotland",
+    "turk": "turkiye",
+    "turkey": "turkiye",
+    "aus": "australia",
+    "austrliaturky": "australia turkiye",
+    "bra": "brazil",
+    "mor": "morocco",
+    "moroco": "morocco",
+    "para": "paraguay",
+    "par": "paraguay",
+    "canad": "canada",
+    "bosniahrg": "bosnia",
+    "safrica": "south africa",
+    "korea": "korea",
+    "czech": "czechia",
+    "czechia": "czechia"
+}
+
+MATCH_STOP_WORDS = {
+    "fifa", "world", "cup", "2026", "match", "preview", "live", "info",
+    "stream", "streaming", "watch", "score", "lineup", "prediction",
+    "predictions", "football", "friendly", "round", "epicsports", "sports",
+    "online", "free", "hd", "sd", "vs", "v", "and", "the", "fc", "club"
+}
+
+STATIC_LINK_PARTS = [
+    "/privacy", "/contact", "/about", "/disclaimer", "/terms", "/dmca", "/search/label",
+    "feed", "blogger.com", "whatsapp.com", "t.me", "telegram", "facebook.com",
+    "twitter.com", "instagram.com", "pinterest.com", "linkedin.com", "#comment"
+]
+
+
+def canonical_url(url):
+    parsed = urlparse(url.strip())
+    query = parsed.query
+    if query == "m=1":
+        query = ""
+    return urlunparse((parsed.scheme, parsed.netloc.lower(), parsed.path.rstrip("/"), "", query, ""))
+
+
+def trusted_domain(url, trusted_domains):
+    host = urlparse(url).netloc.lower()
+    host = host[4:] if host.startswith("www.") else host
+    for domain in trusted_domains or []:
+        domain = domain.lower().strip()
+        domain = domain[4:] if domain.startswith("www.") else domain
+        if host == domain or host.endswith("." + domain):
+            return True
+    return False
+
+
+def normalize_match_tokens(text):
+    tokens = []
+    raw_words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    for raw in raw_words:
+        alias_value = MATCH_ALIASES.get(raw, raw)
+        for word in str(alias_value).split():
+            if word not in MATCH_STOP_WORDS and (len(word) > 2 or word == "usa"):
+                tokens.append(word)
+    return set(tokens)
+
+
+def match_source_score(match_name, candidate_text):
+    match_tokens = normalize_match_tokens(match_name)
+    candidate_tokens = normalize_match_tokens(candidate_text)
+    if not match_tokens or not candidate_tokens:
+        return 0
+    return len(match_tokens & candidate_tokens)
+
+
+def candidate_text_for_url(url, anchor_text=""):
+    parsed = urlparse(url)
+    path_text = parsed.path.replace("/", " ").replace("-", " ").replace("_", " ")
+    return f"{anchor_text or ''} {path_text}"
+
+
+def source_matches_schedule_item(match, candidate_text):
+    score = match_source_score(match.get("match_name", ""), candidate_text)
+    match_token_count = len(normalize_match_tokens(match.get("match_name", "")))
+    if match_token_count <= 2:
+        return score >= match_token_count
+    return score >= 2
+
+
+def source_urls_for_match(match):
+    value = match.get("source_url", "")
+    if isinstance(value, list):
+        return [u for u in value if u]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def append_source_to_match(match, source_url, max_sources):
+    urls = source_urls_for_match(match)
+    canon_existing = {canonical_url(u) for u in urls}
+    canon_new = canonical_url(source_url)
+    if canon_new in canon_existing:
+        return False
+    if len(urls) >= max_sources:
+        return False
+    urls.append(source_url)
+    match["source_url"] = urls if len(urls) > 1 else urls[0]
+    return True
+
+
+def extract_discovery_candidates(portal, html, trusted_domains):
+    candidates = []
+    seen = set()
+    link_pattern = re.compile(r'<a\b([^>]*)>(.*?)</a>', re.IGNORECASE | re.DOTALL)
+    for match in link_pattern.finditer(html or ""):
+        attrs = match.group(1)
+        body = re.sub(r"<[^>]+>", " ", match.group(2))
+        body = re.sub(r"\s+", " ", body).strip()
+        href_match = re.search(r'href=[\x27"]([^\x27"]+)[\x27"]', attrs, re.IGNORECASE)
+        if not href_match:
+            continue
+        resolved_url = urljoin(portal, href_match.group(1))
+        u_lower = resolved_url.lower()
+        if any(part in u_lower for part in STATIC_LINK_PARTS):
+            continue
+        if not trusted_domain(resolved_url, trusted_domains):
+            continue
+        parsed = urlparse(resolved_url)
+        if not parsed.scheme.startswith("http"):
+            continue
+        if not parsed.path or parsed.path == "/":
+            continue
+        canon = canonical_url(resolved_url)
+        if canon in seen:
+            continue
+        seen.add(canon)
+        candidates.append({
+            "url": resolved_url,
+            "text": candidate_text_for_url(resolved_url, body)
+        })
+
+    for raw_url in re.findall(r'https?://[^\s\x27"<>]+', html or ""):
+        resolved_url = raw_url.rstrip("),.;")
+        u_lower = resolved_url.lower()
+        if any(part in u_lower for part in STATIC_LINK_PARTS):
+            continue
+        if not trusted_domain(resolved_url, trusted_domains):
+            continue
+        canon = canonical_url(resolved_url)
+        if canon in seen:
+            continue
+        seen.add(canon)
+        candidates.append({
+            "url": resolved_url,
+            "text": candidate_text_for_url(resolved_url)
+        })
+    return candidates
+
+
+def extract_match_name_from_candidate(candidate_text):
+    from generate_player import extract_match_name
+    match_name = extract_match_name(candidate_text)
+    if match_name:
+        return match_name.title()
+    return None
+
+
+def auto_discover_matches(force=False):
     global last_discovery_time
     now_ts = time.time()
-    # Run auto-discovery at startup and then every 3 minutes (180 seconds)
-    if last_discovery_time > 0 and (now_ts - last_discovery_time) < 180:
+    automation_config = load_automation_config()
+    schedule = load_schedule(automation_config)
+    scheduler_config = get_scheduler_config(automation_config)
+    interval = int(
+        scheduler_config.get("source_refresh_interval_seconds")
+        or scheduler_config.get("auto_discover_interval_seconds", 1800)
+    )
+    state = load_scheduler_state(automation_config)
+    persisted_last = float(state.get("last_source_refresh_ts") or 0)
+    effective_last = max(float(last_discovery_time or 0), persisted_last)
+    if not force and effective_last > 0 and (now_ts - effective_last) < interval:
         return
-        
-    print("[*] Running auto-discovery for upcoming matches...")
+
+    print("[*] Running source discovery/refresh for upcoming matches...")
     last_discovery_time = now_ts
-    
-    schedule = load_json(SCHEDULE_FILE) or []
-    config = load_json(CONFIG_FILE) or {}
-    
-    portals = config.get("auto_discover_portals", [
-        "https://www.rd9sports.online/?m=1",
-        "https://www.epicsports.in/",
-        "https://www.footem.site/",
-        "https://90live.in/",
-        "https://www.rd9sports.pro/",
-        "https://worldcup.epicsports.mobi/",
-        "https://epicsports.mobi/",
-        "http://footm.site/",
-        "http://footem.site/",
-        "https://www.90live.org/"
-    ])
+    state["last_source_refresh_ts"] = now_ts
+    state["last_source_refresh_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    save_scheduler_state(state, automation_config)
+    portals = (
+        scheduler_config.get("discovery_portals")
+        or scheduler_config.get("auto_discover_portals")
+        or []
+    )
+    trusted_domains = scheduler_config.get("trusted_source_domains") or []
+    max_sources = int(scheduler_config.get("max_sources_per_match") or 8)
     
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     discovered_any = False
@@ -273,12 +608,8 @@ def auto_discover_matches():
     name_to_match = {m["match_name"].lower().strip(): m for m in schedule}
     existing_urls = set()
     for m in schedule:
-        urls = m.get("source_url", "")
-        if isinstance(urls, list):
-            for u in urls:
-                existing_urls.add(u.lower().strip())
-        elif isinstance(urls, str):
-            existing_urls.add(urls.lower().strip())
+        for u in source_urls_for_match(m):
+            existing_urls.add(canonical_url(u))
             
     for portal in portals:
         print(f"[*] Scanning portal: {portal}")
@@ -286,65 +617,48 @@ def auto_discover_matches():
             r = requests.get(portal, headers=headers, timeout=12)
             if r.status_code != 200:
                 continue
-                
-            # Parse links using regex
-            links = re.findall(r'href=[\x27\"]([^\x27\"]+)[\x27\"]', r.text)
-            
-            for url in links:
-                resolved_url = urljoin(portal, url)
-                u_lower = resolved_url.lower()
-                
-                # Exclude static/general pages
-                if any(p in u_lower for p in ["/privacy", "/contact", "/about", "/disclaimer", "/terms", "/search/label", "feed", "blogger.com", "whatsapp.com", "t.me", "telegram"]):
+
+            for candidate in extract_discovery_candidates(portal, r.text, trusted_domains):
+                resolved_url = candidate["url"]
+                candidate_text = candidate["text"]
+                resolved_url_key = canonical_url(resolved_url)
+
+                if resolved_url_key in existing_urls:
                     continue
-                    
-                # Is it a match page? (vs/v in path/text)
-                parsed = urlparse(resolved_url)
-                path_segment = parsed.path
-                if path_segment.lower().endswith(".html"):
-                    path_segment = path_segment[:-5]
-                elif path_segment.lower().endswith(".htm"):
-                    path_segment = path_segment[:-4]
-                path_segment = path_segment.replace("-", " ").replace("_", " ")
-                
-                from generate_player import extract_match_name
-                match_name = extract_match_name(path_segment)
-                if not match_name:
-                    continue
-                    
-                match_name = match_name.title()
-                match_name_lower = match_name.lower().strip()
-                resolved_url_lower = resolved_url.lower().strip()
-                
-                if resolved_url_lower in existing_urls:
-                    continue
-                    
-                if match_name_lower in name_to_match:
-                    existing_match = name_to_match[match_name_lower]
+
+                matched_existing = None
+                best_score = 0
+                for existing_match in schedule:
                     if existing_match.get("status") == "completed":
                         continue
-                    # Skip scanning portals if the match has already started
                     try:
                         match_time = parse_time(existing_match["match_time"])
                         now_utc = datetime.now(timezone.utc)
-                        if now_utc >= match_time:
+                        if now_utc >= match_time + timedelta(hours=3):
                             continue
                     except Exception:
                         pass
-                        
-                    curr_url = existing_match["source_url"]
-                    if isinstance(curr_url, list):
-                        if resolved_url not in curr_url:
-                            curr_url.append(resolved_url)
-                    else:
-                        if curr_url.lower().strip() != resolved_url_lower:
-                            existing_match["source_url"] = [curr_url, resolved_url]
-                            
-                    existing_urls.add(resolved_url_lower)
-                    discovered_any = True
-                    print(f"[+] Appended new source URL to existing match {match_name}: {resolved_url}")
+                    if source_matches_schedule_item(existing_match, candidate_text):
+                        score = match_source_score(existing_match.get("match_name", ""), candidate_text)
+                        if score > best_score:
+                            matched_existing = existing_match
+                            best_score = score
+
+                if matched_existing:
+                    if append_source_to_match(matched_existing, resolved_url, max_sources):
+                        existing_urls.add(resolved_url_key)
+                        discovered_any = True
+                        print(f"[+] Appended source URL to {matched_existing['match_name']}: {resolved_url}")
                     continue
-                    
+
+                match_name = extract_match_name_from_candidate(candidate_text)
+                if not match_name:
+                    continue
+
+                match_name_lower = match_name.lower().strip()
+                if match_name_lower in name_to_match:
+                    continue
+
                 print(f"[+] Discovered new match: {match_name} -> {resolved_url}")
                 try:
                     mr = requests.get(resolved_url, headers=headers, timeout=10)
@@ -411,10 +725,12 @@ def auto_discover_matches():
                     
                 if not match_dt:
                     # If match page already lists active streams, start immediately
-                    if re.search(r'(?i)\b(link\s*\d+|stream\s*\d+|btn\s*\d+)\b', m_html):
+                    has_stream_buttons = re.search(r'(?i)\b(link\s*\d+|stream\s*\d+|btn\s*\d+)\b', m_html)
+                    if has_stream_buttons:
                         match_dt = datetime.now(timezone.utc) - timedelta(minutes=5)
                     else:
-                        match_dt = datetime.now(timezone.utc) + timedelta(hours=1)
+                        print(f"[*] Skipping candidate without date/time or stream buttons: {match_name} -> {resolved_url}")
+                        continue
                         
                 if match_dt.tzinfo is None:
                     match_dt = match_dt.replace(tzinfo=timezone.utc)
@@ -439,7 +755,7 @@ def auto_discover_matches():
                 }
                 schedule.append(new_match)
                 name_to_match[match_name_lower] = new_match
-                existing_urls.add(resolved_url_lower)
+                existing_urls.add(resolved_url_key)
                 discovered_any = True
                 print(f"[+] Successfully scheduled match: {match_name} at {time_iso}")
                 
@@ -447,7 +763,7 @@ def auto_discover_matches():
             print(f"[-] Error scanning portal {portal}: {e}")
             
     if discovered_any:
-        save_json(SCHEDULE_FILE, schedule)
+        save_schedule(schedule, automation_config)
         print("[+] Schedule saved after discovery.")
 
 def check_and_run():
@@ -457,32 +773,43 @@ def check_and_run():
     except Exception as e:
         print(f"[-] Auto-discovery failed: {e}")
 
-    schedule = load_json(SCHEDULE_FILE)
-    config = load_json(CONFIG_FILE)
-    if not schedule or not config:
+    automation_config = load_automation_config()
+    schedule = load_schedule(automation_config)
+    config = get_player_blog_config(automation_config)
+    new_config = get_portal_blog_config(automation_config)
+    scheduler_config = get_scheduler_config(automation_config)
+    player_slots = get_player_slots(automation_config)
+    paths = ensure_runtime_dirs(automation_config)
+    if not schedule:
         return
 
-    # Check if we have valid OAuth details
-    has_oauth = all(config.get(k) and not config[k].startswith("YOUR_") 
-                    for k in ["client_id", "client_secret", "refresh_token", "blog_id"])
+    has_player_oauth = has_oauth(config)
+    has_new_oauth = has_oauth(new_config)
 
     changed = False
     now = datetime.now(timezone.utc)
+    schedule, archived = archive_completed_matches(schedule, automation_config, scheduler_config, now)
+    if archived:
+        print(f"[*] Archived {len(archived)} completed match(es) before scheduler run.")
+        changed = True
 
     for match in schedule:
         status = match.get("status", "pending")
         if status == "completed":
             continue
+        match["match_key"] = match.get("match_key") or match_key(match)
 
         match_time = parse_time(match["match_time"])
-        # Active match window: 15 minutes before kickoff up to 3 hours after
-        run_start = match_time - timedelta(minutes=15)
-        run_end = match_time + timedelta(hours=3)
+        run_start, run_end, _ = active_window(match, scheduler_config)
 
         if run_start <= now <= run_end:
             # Check if never run or needs recheck based on kickoff status:
             # 1 minute interval before kickoff, 10 minutes interval after kickoff
-            cooldown_min = 1 if now < match_time else 10
+            cooldown_min = int(
+                scheduler_config.get("pre_kickoff_cooldown_minutes", 1)
+                if now < match_time
+                else scheduler_config.get("post_kickoff_cooldown_minutes", 10)
+            )
             
             last_run_str = match.get("last_run_time")
             should_run = False
@@ -499,19 +826,20 @@ def check_and_run():
             if should_run:
                 print(f"[*] Starting process/update for active match: {match['match_name']}")
                 match["status"] = "processing"
-                save_json(SCHEDULE_FILE, schedule) # Save status immediately
+                save_schedule(schedule, automation_config) # Save status immediately
                 
                 # Define output file name
-                os.makedirs("players", exist_ok=True)
-                temp_output = os.path.join("players", f"player_{match['match_name'].replace(' ', '_').lower()}.html")
+                os.makedirs(paths["players_dir"], exist_ok=True)
+                temp_output = os.path.join(paths["players_dir"], f"player_{slugify_match_name(match['match_name'])}.html")
                 
                 # Step 1: Run generate_player.py to crawl and produce player file
                 source = match["source_url"]
                 if isinstance(source, list):
-                    with open("urls.txt", "w", encoding="utf-8") as f:
+                    urls_path = os.path.join(paths["data_dir"], "urls.txt")
+                    with open(urls_path, "w", encoding="utf-8") as f:
                         for u in source:
                             f.write(u + "\n")
-                    src_arg = ["-f", "urls.txt"]
+                    src_arg = ["-f", urls_path]
                     print(f"[*] Scraping multiple source URLs: {source}...")
                 else:
                     src_arg = ["-u", source]
@@ -537,68 +865,141 @@ def check_and_run():
                     changed = True
                     continue
 
-                # Step 2: Push/Update on Blogger if OAuth is set up
-                if has_oauth:
+                real_stream_links = extract_stream_links(player_html)
+                if not real_stream_links:
+                    print(f"[!] No playable stream links resolved for {match['match_name']}; skipping player-blog upload.")
+                    if has_new_oauth and not match.get("new_blog_prepare_set"):
+                        try:
+                            new_token = get_access_token(new_config)
+                            update_portal_match_page(new_config, new_token, match, "preparing")
+                            match["new_blog_prepare_set"] = True
+                        except Exception as e:
+                            print(f"[-] Portal preparing-state update failed: {e}")
+                    match["status"] = "pending"
+                    match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    changed = True
+                    continue
+
+                # Step 2: Push/Update on the configured player slot if OAuth is set up
+                post_url = None
+                if has_player_oauth:
+                    slot = select_player_slot(match, schedule, player_slots, now, scheduler_config)
+                    if not slot:
+                        print(f"[!] No free player slot available for {match['match_name']}.")
+                        if has_new_oauth and not match.get("new_blog_iframe_set") and not match.get("new_blog_prepare_set"):
+                            try:
+                                new_token = get_access_token(new_config)
+                                update_portal_match_page(new_config, new_token, match, "preparing")
+                                match["new_blog_prepare_set"] = True
+                            except Exception as e:
+                                print(f"[-] Portal preparing-state update failed: {e}")
+                        match["status"] = "pending"
+                        match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                        changed = True
+                        continue
+
                     try:
                         print(f"[*] Fetching access token...")
                         token = get_access_token(config)
-                        post_title = match["match_name"] + " Live Stream"
-                        
-                        post_id = match.get("blogger_post_id")
-                        if post_id and not post_id.startswith("YOUR_") and post_id.strip():
-                            print(f"[*] Updating existing Blogger post {post_id}...")
-                            post_url = update_blogger_post(config, token, post_id, post_title, player_html)
-                        else:
-                            print(f"[*] Creating a NEW Blogger post...")
-                            post_id, post_url = create_blogger_post(config, token, post_title, player_html)
-                            match["blogger_post_id"] = post_id
-                            print(f"[+] Created new Blogger post with ID: {post_id}")
-                            
-                        print(f"[+] Blogger page updated successfully! URL: {post_url}")
+                        post_title = slot.get("title") or (match["match_name"] + " Live Stream")
+                        post_id = slot["post_id"]
+                        print(f"[*] Updating player slot {slot['id']} ({post_id})...")
+                        post_url = update_blogger_post(config, token, post_id, post_title, player_html)
+                        print(f"[+] Player slot updated successfully! URL: {post_url}")
+                        match["player_slot_id"] = slot["id"]
+                        match["player_slot_post_id"] = post_id
+                        match["player_slot_url"] = post_url or slot.get("url", "")
+                        match["blogger_post_id"] = post_id
                         match["blogger_post_url"] = post_url
                         match["iframe_embed_code"] = f'<iframe src="{post_url}" width="100%" height="480px" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="background:#000;"></iframe>'
-                        # Keep as pending while active so it can update again, but record last run
-                        match["status"] = "pending"
-                        match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-                        
-                        # Generate the direct links list
-                        write_direct_links(match["match_name"], post_url, player_html)
                     except Exception as e:
                         print(f"[-] Blogger upload failed: {e}")
                         match["status"] = "pending"
+                        post_url = None
                 else:
-                    print("[!] Blogger OAuth not fully configured. Storing player HTML locally only.")
-                    match["status"] = "pending"
-                    match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    print("[!] Blogger OAuth not fully configured for stream host blog.")
+
+                # Step 3: Generate portal buttons and update the NEW Blogger page when real links exist
+                if post_url and real_stream_links:
+                    write_direct_links(match["match_name"], post_url, player_html, automation_config)
+
+                if has_new_oauth and post_url and not match.get("new_blog_iframe_set"):
+                    try:
+                        print("[*] Fetching access token for the portal blog...")
+                        new_token = get_access_token(new_config)
+                        if real_stream_links:
+                            links_html = read_links_html(match["match_name"], automation_config)
+                            if not links_html:
+                                print("[!] Stream links were extracted but links HTML is missing; setting preparing state.")
+                                update_portal_match_page(new_config, new_token, match, "preparing")
+                                match["new_blog_prepare_set"] = True
+                            else:
+                                new_post_url = update_portal_match_page(new_config, new_token, match, "live", links_html=links_html)
+                                print(f"[+] Portal page updated with live links: {new_post_url}")
+                                match["new_blog_iframe_set"] = True
+                                match["new_blog_prepare_set"] = False
+                        elif not match.get("new_blog_prepare_set"):
+                            update_portal_match_page(new_config, new_token, match, "preparing")
+                            match["new_blog_prepare_set"] = True
+                    except Exception as e:
+                        print(f"[-] Portal blog update failed: {e}")
+
+                # Keep as pending while active so it can update again, but record last run
+                match["status"] = "pending"
+                match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
                 
                 changed = True
 
         elif now > run_end:
-            # Match has ended, run one final time to finalize links
-            print(f"[*] Match active window ended. Performing final crawl for: {match['match_name']}")
+            print(f"[*] Match active window ended: {match['match_name']}")
+            if has_new_oauth and not match.get("new_blog_ended_set"):
+                try:
+                    new_token = get_access_token(new_config)
+                    update_portal_match_page(new_config, new_token, match, "ended")
+                    match["new_blog_ended_set"] = True
+                except Exception as e:
+                    print(f"[-] Portal ended-state update failed: {e}")
             match["status"] = "completed"
             changed = True
 
     if changed:
-        save_json(SCHEDULE_FILE, schedule)
+        schedule, archived_after = archive_completed_matches(schedule, automation_config, scheduler_config, now)
+        if archived_after:
+            print(f"[*] Archived {len(archived_after)} completed match(es) after scheduler run.")
+        save_schedule(schedule, automation_config)
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Match Scheduler and Automator")
     parser.add_argument("--once", action="store_true", help="Run once and exit (for cronjobs)")
     args = parser.parse_args()
+    automation_config = load_automation_config()
+    paths = ensure_runtime_dirs(automation_config)
+
+    def locked_check():
+        with open(paths["lock_file"], "w", encoding="utf-8") as lock_file:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print("[*] Scheduler already running; skipping overlapping invocation.")
+                return
+            lock_file.write(str(os.getpid()))
+            lock_file.truncate()
+            check_and_run()
 
     if args.once:
         print("[*] Running scheduler in one-off mode...")
-        check_and_run()
+        locked_check()
     else:
-        print("[*] Match Scheduler started. Checking every 60 seconds...")
+        scheduler_config = get_scheduler_config(automation_config)
+        loop_interval = int(scheduler_config.get("loop_interval_seconds", 60))
+        print(f"[*] Match Scheduler started. Checking every {loop_interval} seconds...")
         while True:
             try:
-                check_and_run()
+                locked_check()
             except Exception as e:
                 print(f"[-] Scheduler iteration failed: {e}")
-            time.sleep(60)
+            time.sleep(loop_interval)
 
 if __name__ == "__main__":
     main()

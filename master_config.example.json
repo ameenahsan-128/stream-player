@@ -1,0 +1,133 @@
+{
+  "player_blog": {
+    "blog_id": "OLD_PLAYER_BLOG_ID",
+    "client_id": "OLD_PLAYER_GOOGLE_CLIENT_ID",
+    "client_secret": "OLD_PLAYER_GOOGLE_CLIENT_SECRET",
+    "refresh_token": "OLD_PLAYER_REFRESH_TOKEN",
+    "post_title": "Live Stream Player",
+    "player_slots": [
+      {
+        "id": "slot-1",
+        "post_id": "OLD_BLOGGER_POST_OR_PAGE_ID",
+        "title": "Live Stream Player Slot 1",
+        "url": "https://old-player-blog.blogspot.com/p/world-cup-1.html"
+      },
+      {
+        "id": "slot-2",
+        "post_id": "SECOND_OLD_BLOGGER_POST_OR_PAGE_ID",
+        "title": "Live Stream Player Slot 2",
+        "url": "https://old-player-blog.blogspot.com/p/world-cup-2.html"
+      }
+    ],
+    "ads": {
+      "head_script": "<script src=\"https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js\"></script>",
+      "bottom_script": "<script src=\"https://throughalivemedication.com/78/95/36/78953660b707ff1c75b91b933c958645.js\"></script>"
+    }
+  },
+  "portal_blog": {
+    "blog_id": "4927968984731236030",
+    "client_id": "NEW_PORTAL_GOOGLE_CLIENT_ID",
+    "client_secret": "NEW_PORTAL_GOOGLE_CLIENT_SECRET",
+    "refresh_token": "NEW_PORTAL_REFRESH_TOKEN",
+    "widget_base_url": "https://yourdomain.com/widget.html",
+    "image_base_url": "https://yourdomain.com/images",
+    "default_league": "Live Sports",
+    "default_quality": "HD / Auto Quality",
+    "default_channel_info": "Channel details will be updated before kickoff.",
+    "ads": {
+      "top_300x250": "<script>atOptions = {'key':'26752c18ca8361bba098d31342583042','format':'iframe','height':250,'width':300,'params':{}};</script><script src=\"https://throughalivemedication.com/26752c18ca8361bba098d31342583042/invoke.js\"></script>",
+      "popup_300x250": "<script>atOptions = {'key':'26752c18ca8361bba098d31342583042','format':'iframe','height':250,'width':300,'params':{}};</script><script src=\"https://throughalivemedication.com/26752c18ca8361bba098d31342583042/invoke.js\"></script>",
+      "popunder": "<script src=\"https://throughalivemedication.com/45/96/a9/4596a9a27ac7c137dd494fd1f200edbb.js\"></script>",
+      "social_bar": "<script src=\"https://throughalivemedication.com/66/f1/17/66f11775fe2744312299821ac71b38f1.js\"></script>"
+    }
+  },
+  "shared_social": {
+    "whatsapp_groups": [
+      "https://chat.whatsapp.com/E9UG7hmlObr61yTP1CjvAk",
+      "https://chat.whatsapp.com/KdNRt4WCQClLMmudKqe8Eg",
+      "https://chat.whatsapp.com/BfN4WNiLpjUJFtJbUys0nk",
+      "https://chat.whatsapp.com/Gm93HsMZDog9ExQ3KT9ED1",
+      "https://chat.whatsapp.com/CxQ3yYdEqGu0dC5mpaFKZY",
+      "https://chat.whatsapp.com/KmtHD4EPBe424XzohKqxSn",
+      "https://chat.whatsapp.com/C54sNsV9o3X8MMlYJLzCRC"
+    ],
+    "telegram_channels": [
+      "https://t.me/+43_hofAviBs4YWJl",
+      "https://t.me/+pbS2o7aYwe04N2Nl",
+      "https://t.me/+BRroGwpg2wJiZGZl",
+      "https://t.me/+ItWztH1Rb6MxNDU1",
+      "https://t.me/+3Xrk9OJsuT44YjQ1"
+    ],
+    "popup_delay_ms": 5000,
+    "click_target": "_blank"
+  },
+  "shared_smartlink": {
+    "enabled": true,
+    "text": "Continue To Live Coverage",
+    "url": "https://throughalivemedication.com/xsz99637k8?key=50b1239907251e7fd3f28875c685fd32"
+  },
+  "scheduler": {
+    "data_dir": "data",
+    "schedule_file": "data/match_schedule.json",
+    "history_dir": "data/history",
+    "runtime_state_file": "data/runtime_state.json",
+    "players_dir": "data/players",
+    "links_dir": "data/links",
+    "diagnostics_dir": "data/scraped_details",
+    "thumbnails_dir": "data/thumbnails",
+    "lock_file": "data/scheduler.lock",
+    "active_window_start_minutes": 15,
+    "active_window_end_hours": 3,
+    "pre_kickoff_cooldown_minutes": 1,
+    "post_kickoff_cooldown_minutes": 10,
+    "loop_interval_seconds": 60,
+    "auto_discover_interval_seconds": 1800,
+    "source_refresh_interval_seconds": 1800,
+    "max_sources_per_match": 8,
+    "auto_discover_portals": [
+      "https://www.rd9sports.online/?m=1",
+      "https://www.epicsports.in/",
+      "https://www.epicsports.in/?view=tomo",
+      "https://www.epicsports.blog/",
+      "https://www.footem.site/",
+      "https://90live.in/",
+      "https://www.rd9sports.pro/",
+      "https://worldcup.epicsports.mobi/",
+      "https://worldcup.epicsports.co.in/",
+      "https://epicsports.mobi/",
+      "http://footm.site/",
+      "http://footem.site/",
+      "https://www.90live.org/"
+    ],
+    "discovery_portals": [
+      "https://www.rd9sports.online/?m=1",
+      "https://www.epicsports.in/",
+      "https://www.epicsports.in/?view=tomo",
+      "https://www.epicsports.blog/",
+      "https://www.footem.site/",
+      "https://90live.in/",
+      "https://www.rd9sports.pro/",
+      "https://worldcup.epicsports.mobi/",
+      "https://worldcup.epicsports.co.in/",
+      "https://epicsports.mobi/",
+      "http://footm.site/",
+      "http://footem.site/",
+      "https://www.90live.org/"
+    ],
+    "trusted_source_domains": [
+      "epicsports.in",
+      "epicsports.blog",
+      "epicsports.mobi",
+      "worldcup.epicsports.mobi",
+      "worldcup.epicsports.co.in",
+      "epicsports.netmirror.info",
+      "live.epicsportss.com",
+      "rd9sports.pro",
+      "rd9.riddlearena.com",
+      "90live.in",
+      "90live.yallatvlive.com",
+      "footem.site",
+      "es.footem.in"
+    ]
+  }
+}

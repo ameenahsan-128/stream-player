@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Match Preview Widget</title>
+  <!-- Google Fonts: Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700;800&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, #0f1016 0%, #06070a 100%);
+      --card-bg: rgba(18, 20, 29, 0.7);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text-main: #ffffff;
+      --text-muted: #8e92a8;
+      --primary: #00e5ff;
+      --primary-glow: rgba(0, 229, 255, 0.4);
+      --accent: #ff007f;
+      --accent-glow: rgba(255, 0, 127, 0.3);
+      --success: #39ff14;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 15px;
+      overflow-x: hidden;
+    }
+
+    /* Widget Main Container */
+    .widget-container {
+      width: 100%;
+      max-width: 580px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(16px);
+      position: relative;
+    }
+
+    /* Live Badge & Tournament Info */
+    .widget-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .tournament-badge {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 6px 12px;
+      border-radius: 30px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .status-badge {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 6px 12px;
+      border-radius: 30px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-badge.upcoming {
+      background: rgba(0, 229, 255, 0.1);
+      color: var(--primary);
+      border: 1px solid rgba(0, 229, 255, 0.2);
+    }
+
+    .status-badge.live {
+      background: rgba(57, 255, 20, 0.1);
+      color: var(--success);
+      border: 1px solid rgba(57, 255, 20, 0.2);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(57, 255, 20, 0.4); }
+      70% { box-shadow: 0 0 0 10px rgba(57, 255, 20, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(57, 255, 20, 0); }
+    }
+
+    /* Match Teams Card */
+    .match-teams-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 25px 0;
+      position: relative;
+    }
+
+    .team-block {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+
+    .team-badge-circle {
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%);
+      border: 2px solid var(--card-border);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 24px;
+      font-weight: 800;
+      color: #fff;
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+      margin-bottom: 12px;
+      transition: all 0.3s ease;
+      background-clip: padding-box;
+    }
+
+    .team-block:hover .team-badge-circle {
+      transform: translateY(-4px);
+      border-color: var(--primary);
+      box-shadow: 0 12px 24px var(--primary-glow);
+    }
+
+    .team-name {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      max-width: 130px;
+      line-height: 1.3;
+    }
+
+    .vs-divider {
+      font-size: 13px;
+      font-weight: 900;
+      color: var(--accent);
+      background: rgba(255, 0, 127, 0.1);
+      border: 1px solid rgba(255, 0, 127, 0.2);
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow: 0 0 15px var(--accent-glow);
+      z-index: 2;
+    }
+
+    /* Countdown Display */
+    .countdown-section {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .countdown-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 10px;
+    }
+
+    .countdown-timer-grid {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    .timer-unit-box {
+      min-width: 55px;
+    }
+
+    .timer-number {
+      font-size: 26px;
+      font-weight: 800;
+      color: #fff;
+      font-feature-settings: "tnum";
+    }
+
+    .timer-label {
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 4px;
+    }
+
+    /* Kickoff Schedule Text */
+    .schedule-info-box {
+      text-align: center;
+      margin-bottom: 25px;
+    }
+
+    .schedule-time-local {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+
+    .schedule-timezone-note {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* Watch Button */
+    .watch-cta-btn {
+      display: block;
+      width: 100%;
+      background: linear-gradient(90deg, #00e5ff 0%, #0088ff 100%);
+      color: #06070a;
+      text-align: center;
+      padding: 15px 24px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-decoration: none;
+      box-shadow: 0 8px 20px var(--primary-glow);
+      transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+
+    .watch-cta-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 28px rgba(0, 229, 255, 0.6);
+      filter: brightness(1.1);
+    }
+
+    /* Other Matches Selector */
+    .other-matches-section {
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      margin-top: 24px;
+      padding-top: 18px;
+    }
+
+    .other-matches-title {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .other-matches-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 120px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    /* Custom scrollbar for small overflow list */
+    .other-matches-list::-webkit-scrollbar {
+      width: 4px;
+    }
+    .other-matches-list::-webkit-scrollbar-track {
+      background: rgba(255,255,255,0.01);
+    }
+    .other-matches-list::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.1);
+      border-radius: 4px;
+    }
+
+    .other-match-card {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      padding: 10px 14px;
+      border-radius: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+      transition: all 0.2s ease;
+    }
+
+    .other-match-card:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(0, 229, 255, 0.2);
+    }
+
+    .other-match-teams {
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .other-match-time {
+      font-size: 11px;
+      color: var(--primary);
+      font-weight: 500;
+    }
+
+    /* Error Overlay State */
+    .error-container {
+      display: none;
+      text-align: center;
+      padding: 20px;
+    }
+    .error-message {
+      color: var(--accent);
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="widget-container">
+    <div id="widget-main-view">
+      <!-- Header -->
+      <div class="widget-header">
+        <span class="tournament-badge" id="tournament-name">World Cup 2026</span>
+        <span class="status-badge upcoming" id="match-status-badge">
+          <span class="dot"></span><span id="match-status-text">Upcoming</span>
+        </span>
+      </div>
+
+      <!-- Teams Card -->
+      <div class="match-teams-container">
+        <!-- Team 1 -->
+        <div class="team-block">
+          <div class="team-badge-circle" id="team-1-badge" style="background: linear-gradient(135deg, #0072ff 0%, #00c6ff 100%)">?</div>
+          <div class="team-name" id="team-1-name">Team A</div>
+        </div>
+
+        <!-- VS -->
+        <div class="vs-divider">VS</div>
+
+        <!-- Team 2 -->
+        <div class="team-block">
+          <div class="team-badge-circle" id="team-2-badge" style="background: linear-gradient(135deg, #f857a6 0%, #ff5858 100%)">?</div>
+          <div class="team-name" id="team-2-name">Team B</div>
+        </div>
+      </div>
+
+      <!-- Countdown -->
+      <div class="countdown-section" id="countdown-card">
+        <div class="countdown-label" id="countdown-title">Live Match Kickoff In</div>
+        <div class="countdown-timer-grid">
+          <div class="timer-unit-box">
+            <div class="timer-number" id="cd-days">00</div>
+            <div class="timer-label">Days</div>
+          </div>
+          <div class="timer-unit-box">
+            <div class="timer-number" id="cd-hours">00</div>
+            <div class="timer-label">Hrs</div>
+          </div>
+          <div class="timer-unit-box">
+            <div class="timer-number" id="cd-mins">00</div>
+            <div class="timer-label">Mins</div>
+          </div>
+          <div class="timer-unit-box">
+            <div class="timer-number" id="cd-secs">00</div>
+            <div class="timer-label">Secs</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Local Kickoff text -->
+      <div class="schedule-info-box">
+        <div class="schedule-time-local" id="match-local-time">--/--/---- --:-- --</div>
+        <div class="schedule-timezone-note">Kickoff shown in your local timezone</div>
+      </div>
+
+      <div class="schedule-info-box">
+        <div class="schedule-time-local" id="match-channel-info">Channel details will be updated before kickoff.</div>
+        <div class="schedule-timezone-note">Broadcast channel / coverage info</div>
+      </div>
+
+      <!-- Watch CTA -->
+      <a href="#" class="watch-cta-btn" id="watch-button">WATCH LIVE STREAM NOW</a>
+
+      <!-- Other matches list selector -->
+      <div class="other-matches-section" id="other-matches-panel">
+        <div class="other-matches-title">Other Scheduled Games</div>
+        <div class="other-matches-list" id="other-matches-container">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Error container -->
+    <div class="error-container" id="widget-error-view">
+      <div class="error-message">Could not load match schedule data.</div>
+      <div style="font-size:12px; color: var(--text-muted);">Please make sure the widget and schedule are uploaded to the web host.</div>
+    </div>
+  </div>
+
+  <script>
+    // Fallback Mock database for local testing or CORS block cases
+    const fallbackSchedule = [
+      {
+        "match_name": "Qater Vs Switz",
+        "match_time": "2026-06-13T19:00:00Z",
+        "status": "pending",
+        "blogger_post_url": "https://qtwc2022.blogspot.com/p/world-cup-1.html",
+        "channel_info": "Channel details will be updated before kickoff."
+      },
+      {
+        "match_name": "Brazil Vs Morocco",
+        "match_time": "2026-06-14T20:15:00Z",
+        "status": "pending",
+        "blogger_post_url": "https://qtwc2022.blogspot.com/p/world-cup-1.html",
+        "channel_info": "Channel details will be updated before kickoff."
+      },
+      {
+        "match_name": "Scot Vs Haiti",
+        "match_time": "2026-06-15T18:00:00Z",
+        "status": "pending",
+        "blogger_post_url": "https://qtwc2022.blogspot.com/p/world-cup-1.html",
+        "channel_info": "Channel details will be updated before kickoff."
+      },
+      {
+        "match_name": "Turk Vs Aus",
+        "match_time": "2026-06-16T17:30:00Z",
+        "status": "pending",
+        "blogger_post_url": "https://qtwc2022.blogspot.com/p/world-cup-1.html",
+        "channel_info": "Channel details will be updated before kickoff."
+      }
+    ];
+
+    let timerInterval = null;
+
+    // Parse URL params
+    function getQueryParam(param) {
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get(param);
+    }
+
+    function escapeHtml(value) {
+      return String(value || '').replace(/[&<>"']/g, function(ch) {
+        return ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]);
+      });
+    }
+
+    function normalizeInfoValue(value) {
+      if (Array.isArray(value)) return value.filter(Boolean).join(', ');
+      if (value && typeof value === 'object') {
+        return Object.keys(value).map(key => key + ': ' + normalizeInfoValue(value[key])).filter(Boolean).join('; ');
+      }
+      return String(value || '').trim();
+    }
+
+    function getChannelInfo(match) {
+      return normalizeInfoValue(match.channel_info || match.channels || match.channel || match.broadcast_channels || match.tv_channels) || 'Channel details will be updated before kickoff.';
+    }
+
+    // Generate colors/initials based on team name
+    function setupTeamBadge(elementId, teamName) {
+      const el = document.getElementById(elementId);
+      if (!el) return;
+      
+      const cleanName = teamName.replace(/(Vs|vs)/g, '').trim();
+      const initial = cleanName ? cleanName.charAt(0).toUpperCase() : '?';
+      el.textContent = initial;
+
+      // Deterministic gradient colors based on char code
+      const code = cleanName.charCodeAt(0) || 65;
+      const hue1 = (code * 17) % 360;
+      const hue2 = (hue1 + 140) % 360;
+      el.style.background = `linear-gradient(135deg, hsl(${hue1}, 75%, 45%) 0%, hsl(${hue2}, 85%, 35%) 100%)`;
+    }
+
+    // Build the list of other upcoming matches
+    function buildOtherMatches(matches, currentMatchName) {
+      const listContainer = document.getElementById('other-matches-container');
+      if (!listContainer) return;
+      listContainer.innerHTML = '';
+
+      const otherMatches = matches.filter(m => m.match_name !== currentMatchName);
+      if (otherMatches.length === 0) {
+        document.getElementById('other-matches-panel').style.display = 'none';
+        return;
+      }
+
+      otherMatches.forEach(match => {
+        const card = document.createElement('a');
+        card.className = 'other-match-card';
+        // Reload page with new match parameter
+        card.href = `?match=${encodeURIComponent(match.match_name)}`;
+        
+        // Format time
+        const mTime = new Date(match.match_time);
+        const timeStr = mTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const dateStr = mTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+        card.innerHTML = `
+          <div class="other-match-teams">${escapeHtml(match.match_name)}</div>
+          <div class="other-match-time">${escapeHtml(dateStr + ' ' + timeStr)}</div>
+        `;
+        listContainer.appendChild(card);
+      });
+    }
+
+    // Format relative time/countdown
+    function startCountdown(kickoffDateStr) {
+      if (timerInterval) clearInterval(timerInterval);
+
+      const kickoffTime = new Date(kickoffDateStr).getTime();
+      const timerCard = document.getElementById('countdown-card');
+      const timerTitle = document.getElementById('countdown-title');
+      const badge = document.getElementById('match-status-badge');
+      const badgeText = document.getElementById('match-status-text');
+
+      function updateTimer() {
+        const now = new Date().getTime();
+        const diff = kickoffTime - now;
+
+        if (diff <= 0) {
+          // Match is active/past kickoff time
+          clearInterval(timerInterval);
+          document.getElementById('cd-days').textContent = '00';
+          document.getElementById('cd-hours').textContent = '00';
+          document.getElementById('cd-mins').textContent = '00';
+          document.getElementById('cd-secs').textContent = '00';
+          
+          // Show live status
+          badge.className = 'status-badge live';
+          badgeText.textContent = 'Live Now';
+          timerTitle.textContent = 'Match is Live';
+          return;
+        }
+
+        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+        document.getElementById('cd-days').textContent = String(days).padStart(2, '0');
+        document.getElementById('cd-hours').textContent = String(hours).padStart(2, '0');
+        document.getElementById('cd-mins').textContent = String(minutes).padStart(2, '0');
+        document.getElementById('cd-secs').textContent = String(seconds).padStart(2, '0');
+      }
+
+      updateTimer();
+      timerInterval = setInterval(updateTimer, 1000);
+    }
+
+    // Load and present match details
+    function renderMatch(match, allMatches) {
+      // Set teams
+      const nameParts = match.match_name.split(/(?:Vs|vs|VS|\bv\b)/);
+      const team1 = nameParts[0] ? nameParts[0].trim() : 'Team A';
+      const team2 = nameParts[1] ? nameParts[1].trim() : 'Team B';
+
+      document.getElementById('team-1-name').textContent = team1;
+      document.getElementById('team-2-name').textContent = team2;
+
+      setupTeamBadge('team-1-badge', team1);
+      setupTeamBadge('team-2-badge', team2);
+
+      // Set kickoff date & local time
+      const matchTime = new Date(match.match_time);
+      const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+      document.getElementById('match-local-time').textContent = matchTime.toLocaleDateString(undefined, options);
+      document.getElementById('match-channel-info').textContent = getChannelInfo(match);
+
+      // Set CTA link
+      const watchBtn = document.getElementById('watch-button');
+      if (match.new_blogger_page_url) {
+        watchBtn.href = match.new_blogger_page_url;
+      } else if (match.blogger_post_url) {
+        watchBtn.href = match.blogger_post_url;
+      } else if (match.player_slot_url) {
+        watchBtn.href = match.player_slot_url;
+      } else {
+        watchBtn.href = 'https://qtwc2022.blogspot.com/p/world-cup-1.html'; // Fallback
+      }
+
+      // Configure badge
+      const badge = document.getElementById('match-status-badge');
+      const badgeText = document.getElementById('match-status-text');
+      if (match.status === 'active' || match.status === 'live') {
+        badge.className = 'status-badge live';
+        badgeText.textContent = 'Live Now';
+      } else {
+        badge.className = 'status-badge upcoming';
+        badgeText.textContent = 'Upcoming';
+      }
+
+      // Start countdown
+      startCountdown(match.match_time);
+
+      // Render other upcoming matches list
+      buildOtherMatches(allMatches, match.match_name);
+    }
+
+    // Main controller
+    function init() {
+      const matchQuery = getQueryParam('match');
+      const kickoffQuery = getQueryParam('kickoff');
+      const pageUrlQuery = getQueryParam('page_url');
+      const channelQuery = getQueryParam('channel');
+
+      if (matchQuery && kickoffQuery) {
+        const directMatch = {
+          match_name: matchQuery,
+          match_time: kickoffQuery,
+          status: 'pending',
+          new_blogger_page_url: pageUrlQuery || '',
+          channel_info: channelQuery || 'Channel details will be updated before kickoff.'
+        };
+        processSchedule([directMatch].concat(fallbackSchedule), matchQuery);
+        return;
+      }
+
+      // Attempt to load schedule
+      fetch('match_schedule.json')
+        .then(response => response.json())
+        .then(data => {
+          processSchedule(data, matchQuery);
+        })
+        .catch(err => {
+          console.warn("Could not fetch match_schedule.json. Falling back to preview database.", err);
+          processSchedule(fallbackSchedule, matchQuery);
+        });
+    }
+
+    function processSchedule(matches, targetName) {
+      if (!matches || matches.length === 0) {
+        document.getElementById('widget-main-view').style.display = 'none';
+        document.getElementById('widget-error-view').style.display = 'block';
+        return;
+      }
+
+      let selectedMatch = null;
+
+      if (targetName) {
+        // Find by name match
+        const lowerTarget = targetName.toLowerCase().trim();
+        selectedMatch = matches.find(m => m.match_name.toLowerCase().includes(lowerTarget));
+      }
+
+      // If no match found or query not specified, select the next upcoming pending match
+      if (!selectedMatch) {
+        const now = new Date();
+        const pendingMatches = matches.filter(m => m.status === 'pending' || new Date(m.match_time) >= now);
+        
+        if (pendingMatches.length > 0) {
+          // Sort by time ascending
+          pendingMatches.sort((a, b) => new Date(a.match_time) - new Date(b.match_time));
+          selectedMatch = pendingMatches[0];
+        } else {
+          // Default to the first match in list
+          selectedMatch = matches[0];
+        }
+      }
+
+      renderMatch(selectedMatch, matches);
+    }
+
+    // Start on load
+    window.onload = init;
+  </script>
+</body>
+</html>
