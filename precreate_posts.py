@@ -14,7 +14,9 @@ from pipeline_storage import archive_completed_matches, ensure_runtime_dirs, loa
 from portal_renderer import (
     IST,
     get_channel_info,
+    get_team_title_code,
     display_team_name,
+    normalize_team_key,
     parse_match_time,
     preview_post_title,
     render_preview_post,
@@ -271,6 +273,55 @@ def item_matches_title_or_match(item, title, match_name=None, allow_title_only=F
     return len(expected) >= 2 and expected.issubset(combined)
 
 
+def item_matches_team_page(item, team, config=None):
+    team = display_team_name(team)
+    if not team:
+        return False
+
+    title = item.get("title", "")
+    url = item.get("url", "")
+    text_tokens = set(re.findall(r"[a-z0-9]+", f"{title} {url}".lower()))
+    team_words = match_words(team)
+    if team_words and team_words.issubset(match_words(f"{title} {url}")):
+        return True
+
+    team_code = get_team_title_code(config or {}, team)
+    candidate_tokens = {
+        normalize_team_key(team),
+        normalize_team_key(display_team_name(team)),
+        normalize_team_key(team_code),
+    }
+    for candidate in candidate_tokens:
+        candidate_parts = candidate.split()
+        if candidate_parts and all(part in text_tokens for part in candidate_parts):
+            return True
+
+    return False
+
+
+def team_page_reuse_score(item, team, config=None):
+    title = item.get("title", "")
+    url = (item.get("url") or "").lower()
+    team = display_team_name(team)
+    team_slug = re.sub(r"[^a-z0-9]+", "-", normalize_team_key(team)).strip("-")
+    team_code = normalize_team_key(get_team_title_code(config or {}, team)).upper()
+    score = 100
+
+    if team_slug and url.endswith(f"/{team_slug}-info.html"):
+        score = 0
+    elif team_code and normalize_title(title) == normalize_title(f"{team_code} INFO"):
+        score = 5
+    elif team_slug and f"/{team_slug}" in url and "info" in url:
+        score = 10
+    elif "info" in url:
+        score = 20
+    elif "live-streaming" in url:
+        score = 30
+    if "-vs-" in url:
+        score += 10
+    return score
+
+
 def find_existing_blogger_post(config, access_token, title, match_name=None):
     blog_id = config.get("blog_id")
     headers = {"Authorization": f"Bearer {access_token}"}
@@ -314,6 +365,7 @@ def find_existing_blogger_page(config, access_token, title, match_name=None):
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/pages"
     page_token = None
     matches = []
+    team_matches = []
 
     def page_reuse_score(item):
         item_url = (item.get("url") or "").lower()
@@ -341,11 +393,24 @@ def find_existing_blogger_page(config, access_token, title, match_name=None):
         for item in data.get("items", []):
             if item_matches_title_or_match(item, title, match_name, allow_title_only=True):
                 matches.append(item)
+            elif match_name:
+                team1, team2 = split_teams(match_name)
+                for priority, team in enumerate((team1, team2)):
+                    if item_matches_team_page(item, team, config):
+                        team_matches.append((priority, team, item))
+                        break
         page_token = data.get("nextPageToken")
         if not page_token:
             break
     if matches:
         best = sorted(matches, key=page_reuse_score)[0]
+        return best.get("id"), best.get("url")
+    if team_matches:
+        priority, team, best = sorted(
+            team_matches,
+            key=lambda row: (row[0], team_page_reuse_score(row[2], row[1], config))
+        )[0]
+        print(f"[*] Reusing existing team Page for {match_name}: {display_team_name(team)} | {best.get('url')}")
         return best.get("id"), best.get("url")
     return None, None
 
@@ -853,7 +918,7 @@ def can_refresh_portal_content(match, scheduler_config, now):
         return True
 
     start_offset = int(scheduler_config.get("active_window_start_minutes", 15))
-    end_hours = int(scheduler_config.get("active_window_end_hours", 3))
+    end_hours = float(scheduler_config.get("active_window_end_hours", 3))
     run_start = match_time - timedelta(minutes=start_offset)
     run_end = match_time + timedelta(hours=end_hours)
     return not (run_start <= now <= run_end)

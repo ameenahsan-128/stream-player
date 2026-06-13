@@ -67,7 +67,7 @@ def parse_time(value):
 def active_window(match, scheduler_config):
     match_time = parse_time(match["match_time"])
     start_offset = int(scheduler_config.get("active_window_start_minutes", 15))
-    end_hours = int(scheduler_config.get("active_window_end_hours", 3))
+    end_hours = float(scheduler_config.get("active_window_end_hours", 3))
     return match_time - timedelta(minutes=start_offset), match_time + timedelta(hours=end_hours), match_time
 
 

@@ -952,17 +952,20 @@ let playbackStarted = false;
 let startupWatchdog = null;
 let stallWatchdog = null;
 let hlsManifestWatchdog = null;
+let hlsSegmentHealthTimer = null;
 let lastProgressTime = 0;
 let lastProgressPosition = 0;
 let preferredFailoverType = null;
 let lastHlsFailure = null;
 const STARTUP_TIMEOUT_MS = 8000;
 const STALL_TIMEOUT_MS = 6000;
-const HLS_MANIFEST_TIMEOUT_MS = 12000;
-const HLS_PLAYBACK_TIMEOUT_MS = 30000;
-const HLS_STALL_TIMEOUT_MS = 15000;
+// HLS is prone to silent stalls: use shorter timeouts so we switch faster
+const HLS_MANIFEST_TIMEOUT_MS = 10000;  // reduced from 12s
+const HLS_PLAYBACK_TIMEOUT_MS = 12000;  // reduced from 30s — HLS either starts quickly or not at all
+const HLS_STALL_TIMEOUT_MS = 8000;      // reduced from 15s — detect HLS stalls sooner
 const HLS_MAX_NETWORK_RECOVERIES = 2;
 const HLS_MAX_MEDIA_RECOVERIES = 2;
+const HLS_LOAD_ERROR_FAILOVER_LIMIT = 1;  // reduced from 2 — one load error = switch HLS link
 
 /* ═══════════════════════════════════════════════════════════════
    ENGINE BADGE UI
@@ -1002,6 +1005,11 @@ function typeLabel(type) {
   return (type || 'stream').toUpperCase();
 }
 
+function randomChoice(items) {
+  if (!items.length) return null;
+  return items[Math.floor(Math.random() * items.length)];
+}
+
 function findNextLinkIndex(preferredType) {
   const candidates = STREAM_LINKS
     .map((lnk, i) => ({ lnk, i }))
@@ -1010,8 +1018,19 @@ function findNextLinkIndex(preferredType) {
   if (!candidates.length) return -1;
 
   if (preferredType) {
-    const sameTypeUntried = candidates.find(({ lnk }) => lnk.type === preferredType && lnk.failCount === 0);
-    if (sameTypeUntried) return sameTypeUntried.i;
+    const sameTypeUntried = candidates.filter(({ lnk }) => lnk.type === preferredType && lnk.failCount === 0);
+    if (sameTypeUntried.length) {
+      const picked = preferredType === 'hls' ? randomChoice(sameTypeUntried) : sameTypeUntried[0];
+      return picked.i;
+    }
+    if (preferredType === 'hls') {
+      const sameType = candidates.filter(({ lnk }) => lnk.type === 'hls');
+      if (sameType.length) {
+        const minFails = Math.min(...sameType.map(({ lnk }) => lnk.failCount));
+        const leastFailed = sameType.filter(({ lnk }) => lnk.failCount === minFails);
+        return randomChoice(leastFailed).i;
+      }
+    }
   }
 
   const nextUntried = candidates.find(({ lnk }) => lnk.failCount === 0);
@@ -1039,9 +1058,11 @@ function clearPlaybackTimers() {
   clearTimeout(startupWatchdog);
   clearTimeout(stallWatchdog);
   clearTimeout(hlsManifestWatchdog);
+  clearInterval(hlsSegmentHealthTimer);
   startupWatchdog = null;
   stallWatchdog = null;
   hlsManifestWatchdog = null;
+  hlsSegmentHealthTimer = null;
 }
 
 function resetPlaybackHealth() {
@@ -1254,6 +1275,7 @@ function loadHLS(url, onSuccess, onFail) {
   let manifestParsed = false;
   let networkRecoveries = 0;
   let mediaRecoveries = 0;
+  let hlsLoadErrors = 0;
 
   function recordHlsFailure(data, note) {
     lastHlsFailure = {
@@ -1274,6 +1296,16 @@ function loadHLS(url, onSuccess, onFail) {
     setEngineTry('hls', 'failed');
     if (onFail) onFail(hlsFailureText());
     else showError(hlsFailureText());
+  }
+
+  function isHlsLoadError(data) {
+    const details = String((data && data.details) || '').toLowerCase();
+    return (
+      details.includes('fragload') ||
+      details.includes('levelload') ||
+      details.includes('manifestload') ||
+      details.includes('keyload')
+    );
   }
 
   if (!Hls.isSupported() && video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -1322,11 +1354,30 @@ function loadHLS(url, onSuccess, onFail) {
       HLS_PLAYBACK_TIMEOUT_MS,
       'HLS manifest loaded but playback did not start. Trying next HLS link...'
     );
+    // Start a segment health pulse: if no timeupdate fires for HLS_STALL_TIMEOUT_MS
+    // we proactively switch without waiting for the stall watchdog.
+    hlsSegmentHealthTimer = setInterval(() => {
+      if (attemptId !== playbackAttemptId) { clearInterval(hlsSegmentHealthTimer); return; }
+      if (!playbackStarted) return;
+      if (Date.now() - lastProgressTime > HLS_STALL_TIMEOUT_MS) {
+        clearInterval(hlsSegmentHealthTimer);
+        failCurrentLink('HLS segment health check failed — stream stalled. Switching...');
+      }
+    }, 2000);
     if (onSuccess) onSuccess();
   });
 
   hlsInstance.on(Hls.Events.ERROR, (e, data) => {
     recordHlsFailure(data, data && data.details ? data.details : 'HLS error');
+    if (isHlsLoadError(data)) {
+      hlsLoadErrors += 1;
+      if (!playbackStarted || hlsLoadErrors >= HLS_LOAD_ERROR_FAILOVER_LIMIT || (data && data.fatal)) {
+        failHls('HLS load error. Shuffling to another HLS link...', data);
+        return;
+      }
+      startStallWatchdog(playbackAttemptId, 'HLS load errors detected. Trying next HLS link...', Math.min(HLS_STALL_TIMEOUT_MS, 5000));
+      return;
+    }
     if (data.fatal) {
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < HLS_MAX_NETWORK_RECOVERIES) {
         networkRecoveries += 1;
@@ -2422,10 +2473,13 @@ def infer_stream_type_from_url(url):
     return "iframe"
 
 
-def extract_embedded_stream_url(url):
+def extract_embedded_stream_url(url, allow_iframe_candidate=True, _depth=0):
     parsed = urlparse(url)
     params = parse_qs(parsed.query, keep_blank_values=True)
-    preferred_keys = ("src", "url", "file", "dtv", "hls", "mpd", "get", "b4x", "source")
+    preferred_keys = {
+        "src", "url", "file", "dtv", "hls", "mpd", "get", "b4x", "source",
+        "vivo", "embed", "player", "stream", "xy9ert8", "u",
+    }
 
     def normalize_candidate(value):
         value = unquote(str(value or "").strip())
@@ -2440,22 +2494,46 @@ def extract_embedded_stream_url(url):
             pass
         return ""
 
-    for key in preferred_keys:
-        for value in params.get(key, []):
+    def resolve_candidate(candidate, preferred=False):
+        if not candidate:
+            return ""
+        candidate_type = infer_stream_type_from_url(candidate)
+        if candidate_type in ("hls", "dash", "native"):
+            return candidate
+        if _depth < 2:
+            nested = extract_embedded_stream_url(candidate, allow_iframe_candidate, _depth + 1)
+            if nested:
+                return nested
+        if preferred and allow_iframe_candidate and candidate_type == "iframe":
+            return candidate
+        return ""
+
+    for key, values in params.items():
+        if key.lower() not in preferred_keys:
+            continue
+        for value in values:
             candidate = normalize_candidate(value)
-            if candidate and infer_stream_type_from_url(candidate) in ("hls", "dash", "native"):
-                return candidate
+            resolved = resolve_candidate(candidate, preferred=True)
+            if resolved:
+                return resolved
     for values in params.values():
         for value in values:
             candidate = normalize_candidate(value)
-            if candidate and infer_stream_type_from_url(candidate) in ("hls", "dash", "native"):
-                return candidate
+            resolved = resolve_candidate(candidate, preferred=False)
+            if resolved and infer_stream_type_from_url(resolved) in ("hls", "dash", "native"):
+                return resolved
     return ""
 
 
 def response_cors_ok(response):
-    origin = response.headers.get("access-control-allow-origin", "")
-    return origin in ("*", "https://qtwc2022.blogspot.com") or bool(origin)
+    origin = response.headers.get("access-control-allow-origin", "").strip().lower()
+    allowed = {
+        "*",
+        "https://qtwc2022.blogspot.com",
+        "https://www.goforsports.net",
+        "https://goforsports.net",
+    }
+    return origin in allowed
 
 
 def read_stream_text(response, max_bytes=200000):
@@ -2479,33 +2557,108 @@ def first_playlist_uri(manifest_text):
     return ""
 
 
+def playlist_uris(manifest_text):
+    uris = []
+    for line in manifest_text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            uris.append(line)
+    return uris
+
+
+def is_vod_or_finished_hls(manifest_text):
+    upper = (manifest_text or "").upper()
+    return "#EXT-X-PLAYLIST-TYPE:VOD" in upper or "#EXT-X-ENDLIST" in upper
+
+
+def response_looks_like_html(content_bytes, content_type=""):
+    if "text/html" in (content_type or "").lower():
+        return True
+    sample = (content_bytes or b"").lstrip()[:256].lower()
+    return sample.startswith((b"<!doctype html", b"<html", b"<script"))
+
+
+def probe_hls_segment(segment_url, headers):
+    response = requests.get(segment_url, headers=headers, timeout=8, stream=True, allow_redirects=True)
+    status_code = response.status_code
+    cors_ok = response_cors_ok(response)
+    content_type = response.headers.get("content-type", "")
+    sample = b""
+    try:
+        for chunk in response.iter_content(chunk_size=1024):
+            if chunk:
+                sample += chunk
+            if len(sample) >= 2048:
+                break
+    finally:
+        response.close()
+
+    if status_code not in (200, 206):
+        return False, f"hls-segment-http-{status_code}", status_code
+    if not cors_ok:
+        return False, "hls-segment-cors-blocked", status_code
+    if not sample:
+        return False, "hls-segment-empty", status_code
+    if response_looks_like_html(sample, content_type):
+        return False, "hls-segment-html", status_code
+    return True, "hls-media-ok", status_code
+
+
+def probe_hls_media_playlist(playlist_url, playlist_text, headers):
+    if is_vod_or_finished_hls(playlist_text):
+        return False, "hls-vod-or-ended-playlist", None
+    if "#EXTINF" not in playlist_text and "#EXT-X-MAP" not in playlist_text:
+        return False, "hls-no-media-segments", None
+
+    failures = []
+    for media_uri in playlist_uris(playlist_text)[:5]:
+        if media_uri.lower().split("?", 1)[0].endswith(".m3u8"):
+            continue
+        media_url = urljoin(playlist_url, media_uri)
+        ok, reason, status = probe_hls_segment(media_url, headers)
+        if ok:
+            return True, reason, status
+        failures.append(reason)
+    return False, failures[-1] if failures else "hls-no-media-uri", None
+
+
 def probe_hls_media(manifest_url, manifest_text, headers):
+    if is_vod_or_finished_hls(manifest_text):
+        return False, "hls-vod-or-ended-playlist", None
+
     first_uri = first_playlist_uri(manifest_text)
     if not first_uri:
         return False, "hls-no-media-uri", None
 
-    child_url = urljoin(manifest_url, first_uri)
-    response = requests.get(child_url, headers=headers, timeout=6, stream=True, allow_redirects=True)
-    status_code = response.status_code
-    if response.status_code not in (200, 206):
+    if "#EXT-X-STREAM-INF" not in manifest_text:
+        return probe_hls_media_playlist(manifest_url, manifest_text, headers)
+
+    failures = []
+    for variant_uri in playlist_uris(manifest_text)[:5]:
+        child_url = urljoin(manifest_url, variant_uri)
+        response = requests.get(child_url, headers=headers, timeout=8, stream=True, allow_redirects=True)
+        status_code = response.status_code
+        cors_ok = response_cors_ok(response)
+        if response.status_code not in (200, 206):
+            response.close()
+            failures.append(f"hls-child-http-{status_code}")
+            continue
+        if not cors_ok:
+            response.close()
+            failures.append("hls-child-cors-blocked")
+            continue
+
+        content = read_stream_text(response, max_bytes=65536)
         response.close()
-        return False, f"hls-child-http-{status_code}", status_code
+        if not content.lstrip().startswith("#EXTM3U"):
+            failures.append("hls-child-invalid-manifest")
+            continue
+        media_ok, media_reason, media_status = probe_hls_media_playlist(child_url, content, headers)
+        if media_ok:
+            return True, media_reason, media_status
+        failures.append(media_reason)
 
-    content = read_stream_text(response, max_bytes=65536)
-    response.close()
-    if content.lstrip().startswith("#EXTM3U"):
-        media_uri = first_playlist_uri(content)
-        if not media_uri:
-            return False, "hls-child-no-media-uri", status_code
-        media_url = urljoin(child_url, media_uri)
-        media_response = requests.get(media_url, headers=headers, timeout=6, stream=True, allow_redirects=True)
-        media_status = media_response.status_code
-        media_response.close()
-        if media_status not in (200, 206):
-            return False, f"hls-media-http-{media_status}", media_status
-        return True, "hls-media-ok", media_status
-
-    return True, "hls-media-ok", status_code
+    return False, failures[-1] if failures else "hls-no-playable-variant", None
 
 
 def dash_manifest_kids(manifest_text):
@@ -2558,7 +2711,7 @@ def probe_dash_init_segment(manifest_url, manifest_bytes, headers):
 def probe_stream_url(url, stream_type, clear_keys=None):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://www.rd9sports.pro/",
+        "Referer": "https://qtwc2022.blogspot.com/",
         "Origin": "https://qtwc2022.blogspot.com",
     }
     result = {
@@ -2596,6 +2749,10 @@ def probe_stream_url(url, stream_type, clear_keys=None):
             result["validation_reason"] = result["error"]
             print(f"[-] Stream URL validation failed for {url} with status {r.status_code}")
             return result
+        if stream_type == "hls" and not result["cors_ok"]:
+            result["error"] = "hls-manifest-cors-blocked"
+            result["validation_reason"] = result["error"]
+            return result
 
         manifest_text = ""
         manifest_bytes = b""
@@ -2616,11 +2773,6 @@ def probe_stream_url(url, stream_type, clear_keys=None):
                 result["validation_reason"] = media_reason
                 return result
             result["validation_reason"] = media_reason
-            if "#EXT-X-PLAYLIST-TYPE:VOD" in manifest_text.upper():
-                result["backup"] = True
-                result["is_vod"] = True
-                result["validation_reason"] = "vod-playlist-backup"
-
         elif stream_type == "dash":
             if "<MPD" not in manifest_text:
                 result["error"] = "invalid-dash-manifest"
@@ -3030,15 +3182,7 @@ def main():
                 # Check if the stream link is responsive/playable and collect ranking data.
                 probe = probe_stream_url(playback_url, s_type, clear_keys=clear_keys_for_probe)
                 if not probe.get("working") and playback_url != original_stream_url:
-                    backup_probe = probe_stream_url(original_stream_url, "iframe")
-                    if backup_probe.get("working"):
-                        backup_probe["backup"] = True
-                        backup_probe["validation_status"] = "backup"
-                        backup_probe["validation_reason"] = f"embedded-stream-failed:{probe.get('validation_reason') or probe.get('error')}"
-                        backup_probe["score"] = min(int(backup_probe.get("score") or 0), 20)
-                        playback_url = original_stream_url
-                        s_type = "iframe"
-                        probe = backup_probe
+                    print(f"[-] Skipping wrapper iframe because embedded target failed: {original_stream_url} -> {playback_url} ({probe.get('validation_reason') or probe.get('error')})")
 
                 if not probe.get("working"):
                     print(f"[-] Skipping dead/unresponsive stream URL: {playback_url} ({probe.get('validation_reason') or probe.get('error')})")

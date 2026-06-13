@@ -296,45 +296,70 @@ def write_direct_links(match_name, post_url, player_html, config=None):
         for idx, lnk in enumerate(links_data[:7]):
             label = lnk.get("label", "")
             meta = lnk.get("meta", "")
+            badges = lnk.get("badges", [])
+            lnk_type = lnk.get("type", "")
+            height = lnk.get("height")
+            latency_ms = lnk.get("latencyMs")
             direct_url = f"{post_url}?link={idx + 1}"
-            
-            # Extract Quality
-            label_lower = label.lower()
-            meta_lower = meta.lower()
-            if "hd" in label_lower or "hd" in meta_lower:
+
+            # --- Quality: use height from probe data first, then badges/text ---
+            if height and isinstance(height, (int, float)):
+                if height >= 1080:
+                    quality = "1080p HD"
+                elif height >= 720:
+                    quality = "720p HD"
+                elif height >= 480:
+                    quality = "480p SD"
+                else:
+                    quality = f"{int(height)}p"
+            elif "hd" in badges or "hd" in label.lower() or "hd" in meta.lower():
                 quality = "HD"
-            elif "sd" in label_lower or "sd" in meta_lower:
+            elif "sd" in badges or "sd" in label.lower() or "sd" in meta.lower():
                 quality = "SD"
+            elif "auto" in badges or lnk_type in ("dash", "hls"):
+                quality = "Auto Quality"
             else:
                 quality = "Auto Quality"
-                
-            # Extract Format
-            if "dash" in meta_lower or "mpeg-dash" in meta_lower or "dash" in label_lower:
+
+            # --- Format: use actual stream type first ---
+            type_fmt_map = {"dash": "DASH", "hls": "HLS", "native": "MP4", "iframe": "Embed"}
+            if lnk_type in type_fmt_map:
+                fmt = type_fmt_map[lnk_type]
+            elif "dash" in badges or "mpeg-dash" in meta.lower():
                 fmt = "DASH"
-            elif "hls" in meta_lower or "hls" in label_lower:
+            elif "hls" in badges or "hls" in meta.lower():
                 fmt = "HLS"
-            elif "youtube" in meta_lower or "yt" in meta_lower or "yt" in label_lower:
-                fmt = "YT"
+            elif "mp4" in badges:
+                fmt = "MP4"
+            elif "iframe" in badges or "embed" in meta.lower():
+                fmt = "Embed"
             else:
-                fmt = "Direct"
-                
-            # Extract Language
-            if "ara" in label_lower or "arabic" in label_lower or "arabic" in meta_lower:
+                fmt = "Stream"
+
+            # --- Language: from badges then text ---
+            label_lower = label.lower()
+            meta_lower = meta.lower()
+            if "ara" in badges or "arabic" in label_lower or "arabic" in meta_lower:
                 lang = "ARA"
-            elif "esp" in label_lower or "spanish" in label_lower or "spanish" in meta_lower:
+            elif "esp" in badges or "spanish" in label_lower or "spanish" in meta_lower:
                 lang = "ESP"
+            elif "eng" in badges or "english" in label_lower:
+                lang = "ENG"
             else:
-                lang = "ENG" # Default language
-                
+                lang = "ENG"  # Default
+
+            # --- Latency tag ---
+            latency_tag = f" · {latency_ms}ms" if latency_ms is not None else ""
+
             # Construct button elements
             title_text = f"{match_name} — Link {idx + 1}"
-            subtitle_text = f"{quality} • {fmt} • {lang}"
-            
+            subtitle_text = f"{quality} · {fmt} · {lang}{latency_tag}"
+
             # Plain text representation
             btn_label = f"{title_text} | {subtitle_text}"
             lines.append(f"{idx + 1}. {btn_label}")
             lines.append(f"   Link: {direct_url}\n")
-            
+
             # HTML anchor formatted like a button with title and subtitle
             html_lines.append(f'  <a class="stream-btn" href="{direct_url}" target="_blank">')
             html_lines.append(f'    <span class="stream-title">{title_text}</span>')
@@ -407,7 +432,7 @@ def read_links_html(match_name, config=None):
 def active_window(match, scheduler_config):
     match_time = parse_time(match["match_time"])
     start_offset = int(scheduler_config.get("active_window_start_minutes", 15))
-    end_hours = int(scheduler_config.get("active_window_end_hours", 3))
+    end_hours = float(scheduler_config.get("active_window_end_hours", 3))
     return match_time - timedelta(minutes=start_offset), match_time + timedelta(hours=end_hours), match_time
 
 
@@ -452,6 +477,16 @@ def select_player_slot(match, schedule, slots, now, scheduler_config):
         if slot["id"] not in occupied:
             return slot
     return None
+
+
+def dedicated_player_post_id(match, slots):
+    post_id = str(match.get("blogger_post_id") or "").strip()
+    if not post_id or post_id.startswith("YOUR_"):
+        return ""
+    slot_post_ids = {str(slot.get("post_id") or "").strip() for slot in slots or []}
+    if post_id in slot_post_ids:
+        return ""
+    return post_id
 
 
 def update_portal_match_page(automation_config, new_config, new_token, match, state, links_html=""):
@@ -900,6 +935,12 @@ def check_and_run():
         status = match.get("status", "pending")
         if status == "completed":
             continue
+        # Self-heal: if a previous run crashed mid-way and left status=processing,
+        # treat it as pending so the scheduler retries instead of freezing.
+        if status == "processing":
+            print(f"[!] Match '{match.get('match_name')}' found in 'processing' state — resetting to 'pending' for retry.")
+            match["status"] = "pending"
+            status = "pending"
         match["match_key"] = match.get("match_key") or match_key(match)
         portal_updates_enabled = has_new_oauth and not is_manual_portal_match(match)
 
@@ -908,7 +949,22 @@ def check_and_run():
 
         if run_start <= now <= run_end:
             cooldown_min = scrape_cooldown_minutes(now, match_time, scheduler_config)
-            
+
+            # Failure backoff: if we have had 3+ consecutive failures, skip until
+            # at least (fail_count * cooldown_min) minutes have passed since last run.
+            fail_count = int(match.get("scrape_fail_count") or 0)
+            if fail_count >= 3:
+                backoff_min = min(fail_count * cooldown_min, 30)  # cap at 30 min
+                last_run_str = match.get("last_run_time")
+                if last_run_str:
+                    try:
+                        last_run_dt = parse_time(last_run_str)
+                        if now - last_run_dt < timedelta(minutes=backoff_min):
+                            print(f"[!] Skipping {match['match_name']} — backoff active ({fail_count} failures, wait {backoff_min} min).")
+                            continue
+                    except Exception:
+                        pass
+
             last_run_str = match.get("last_run_time")
             should_run = False
             if not last_run_str:
@@ -949,6 +1005,10 @@ def check_and_run():
                                 print(f"[-] Preview post lineup refresh failed: {e}")
                 except Exception as e:
                     print(f"[-] Lineup refresh failed: {e}")
+                # Stamp last_run_time NOW (before the scrape) so the cooldown window is
+                # measured from when we started, not when we finished.  This prevents
+                # immediate re-triggers if the scrape itself takes longer than cooldown.
+                match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
                 match["status"] = "processing"
                 save_schedule(schedule, automation_config) # Save status immediately
                 
@@ -972,9 +1032,12 @@ def check_and_run():
                     cmd = ["python3", "generate_player.py"] + src_arg + ["-o", temp_output]
                     res = subprocess.run(cmd, capture_output=True, text=True, check=True)
                     print(f"[+] Scraping successful. Generated {temp_output}")
+                    match["scrape_fail_count"] = 0  # Reset failure counter on success
                 except Exception as e:
                     print(f"[-] Scraping failed: {e}")
-                    # Revert to pending so we retry in the next loop
+                    # Increment failure counter for backoff logic
+                    match["scrape_fail_count"] = int(match.get("scrape_fail_count") or 0) + 1
+                    print(f"[!] Scrape fail count for {match['match_name']}: {match['scrape_fail_count']}")
                     match["status"] = "pending"
                     changed = True
                     continue
@@ -985,6 +1048,7 @@ def check_and_run():
                         player_html = pf.read()
                 else:
                     print(f"[-] Output file {temp_output} not found.")
+                    match["scrape_fail_count"] = int(match.get("scrape_fail_count") or 0) + 1
                     match["status"] = "pending"
                     changed = True
                     continue
@@ -992,7 +1056,9 @@ def check_and_run():
                 real_stream_links = extract_stream_links(player_html)
                 if not real_stream_links:
                     print(f"[!] No playable stream links resolved for {match['match_name']}; skipping player-blog upload.")
-                    if portal_updates_enabled and not match.get("new_blog_prepare_set"):
+                    # Only set preparing state if the portal page hasn't been set to live yet
+                    # (avoid overwriting live links with "preparing" message)
+                    if portal_updates_enabled and not match.get("new_blog_prepare_set") and not match.get("new_blog_iframe_set"):
                         try:
                             new_token = get_access_token(new_config)
                             update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
@@ -1000,42 +1066,53 @@ def check_and_run():
                         except Exception as e:
                             print(f"[-] Portal preparing-state update failed: {e}")
                     match["status"] = "pending"
-                    match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
                     changed = True
                     continue
 
                 # Step 2: Push/Update on the configured player slot if OAuth is set up
                 post_url = None
                 if has_player_oauth:
-                    slot = select_player_slot(match, schedule, player_slots, now, scheduler_config)
-                    if not slot:
-                        print(f"[!] No free player slot available for {match['match_name']}.")
-                        if portal_updates_enabled and not match.get("new_blog_iframe_set") and not match.get("new_blog_prepare_set"):
-                            try:
-                                new_token = get_access_token(new_config)
-                                update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
-                                match["new_blog_prepare_set"] = True
-                            except Exception as e:
-                                print(f"[-] Portal preparing-state update failed: {e}")
-                        match["status"] = "pending"
-                        match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-                        changed = True
-                        continue
-
                     try:
                         print(f"[*] Fetching access token...")
                         token = get_access_token(config)
-                        post_title = slot.get("title") or (match["match_name"] + " Live Stream")
-                        post_id = slot["post_id"]
-                        print(f"[*] Updating player slot {slot['id']} ({post_id})...")
-                        post_url = update_blogger_post(config, token, post_id, post_title, player_html)
-                        print(f"[+] Player slot updated successfully! URL: {post_url}")
-                        match["player_slot_id"] = slot["id"]
-                        match["player_slot_post_id"] = post_id
-                        match["player_slot_url"] = post_url or slot.get("url", "")
-                        match["blogger_post_id"] = post_id
-                        match["blogger_post_url"] = post_url
-                        match["iframe_embed_code"] = f'<iframe src="{post_url}" width="100%" height="480px" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="background:#000;"></iframe>'
+                        dedicated_post_id = dedicated_player_post_id(match, player_slots)
+                        if dedicated_post_id:
+                            post_title = match["match_name"] + " Live Stream"
+                            print(f"[*] Updating dedicated player post {dedicated_post_id}...")
+                            post_url = update_blogger_post(config, token, dedicated_post_id, post_title, player_html)
+                            print(f"[+] Dedicated player post updated successfully! URL: {post_url}")
+                            match["blogger_post_id"] = dedicated_post_id
+                            match["blogger_post_url"] = post_url
+                            match["player_slot_url"] = post_url
+                            match.pop("player_slot_id", None)
+                            match.pop("player_slot_post_id", None)
+                        else:
+                            slot = select_player_slot(match, schedule, player_slots, now, scheduler_config)
+                            if not slot:
+                                print(f"[!] No free player slot available for {match['match_name']}.")
+                                # Only set preparing if neither live nor preparing state is already set
+                                if portal_updates_enabled and not match.get("new_blog_iframe_set") and not match.get("new_blog_prepare_set"):
+                                    try:
+                                        new_token = get_access_token(new_config)
+                                        update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                                        match["new_blog_prepare_set"] = True
+                                    except Exception as e:
+                                        print(f"[-] Portal preparing-state update failed: {e}")
+                                match["status"] = "pending"
+                                changed = True
+                                continue
+
+                            post_title = slot.get("title") or (match["match_name"] + " Live Stream")
+                            post_id = slot["post_id"]
+                            print(f"[*] Updating player slot {slot['id']} ({post_id})...")
+                            post_url = update_blogger_post(config, token, post_id, post_title, player_html)
+                            print(f"[+] Player slot updated successfully! URL: {post_url}")
+                            match["player_slot_id"] = slot["id"]
+                            match["player_slot_post_id"] = post_id
+                            match["player_slot_url"] = post_url or slot.get("url", "")
+                            match["blogger_post_id"] = post_id
+                            match["blogger_post_url"] = post_url
+                        match.pop("iframe_embed_code", None)
                     except Exception as e:
                         print(f"[-] Blogger upload failed: {e}")
                         match["status"] = "pending"
@@ -1048,7 +1125,7 @@ def check_and_run():
                 if post_url and real_stream_links:
                     links_written = write_direct_links(match["match_name"], post_url, player_html, automation_config)
 
-                if portal_updates_enabled and post_url and not match.get("new_blog_iframe_set"):
+                if portal_updates_enabled and post_url:
                     try:
                         print("[*] Fetching access token for the portal blog...")
                         new_token = get_access_token(new_config)
@@ -1056,8 +1133,10 @@ def check_and_run():
                             links_html = read_links_html(match["match_name"], automation_config)
                             if not links_html:
                                 print("[!] Stream links were extracted but links HTML is missing; setting preparing state.")
-                                update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
-                                match["new_blog_prepare_set"] = True
+                                # Only set preparing if page hasn't already been set to live
+                                if not match.get("new_blog_iframe_set"):
+                                    update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                                    match["new_blog_prepare_set"] = True
                             else:
                                 new_post_url = update_portal_match_page(automation_config, new_config, new_token, match, "live", links_html=links_html)
                                 print(f"[+] Portal page updated with live links: {new_post_url}")
@@ -1065,18 +1144,19 @@ def check_and_run():
                                 match["new_blog_prepare_set"] = False
                         elif real_stream_links:
                             print("[!] Stream links were extracted but no valid portal button HTML was written; setting preparing state.")
-                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
-                            match["new_blog_prepare_set"] = True
-                        elif not match.get("new_blog_prepare_set"):
+                            if not match.get("new_blog_iframe_set"):
+                                update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                                match["new_blog_prepare_set"] = True
+                        elif not match.get("new_blog_prepare_set") and not match.get("new_blog_iframe_set"):
+                            # Only set preparing if the page hasn't already gone live
                             update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
                             match["new_blog_prepare_set"] = True
                     except Exception as e:
                         print(f"[-] Portal blog update failed: {e}")
 
-                # Keep as pending while active so it can update again, but record last run
+                # Keep as pending while active so it can update again
+                # (last_run_time was already stamped before the scrape began)
                 match["status"] = "pending"
-                match["last_run_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-                
                 changed = True
 
         elif now > run_end:
@@ -1090,6 +1170,14 @@ def check_and_run():
                 except Exception as e:
                     print(f"[-] Portal ended-state update failed: {e}")
             match["status"] = "completed"
+            # Clean up stale player HTML file for this match
+            try:
+                player_file = os.path.join(paths["players_dir"], f"player_{slugify_match_name(match['match_name'])}.html")
+                if os.path.exists(player_file):
+                    os.remove(player_file)
+                    print(f"[*] Cleaned up stale player file: {player_file}")
+            except Exception as e:
+                print(f"[!] Warning: could not remove player file: {e}")
             changed = True
 
     if changed:
