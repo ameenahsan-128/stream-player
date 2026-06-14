@@ -2043,6 +2043,10 @@ def extract_match_name(text_or_url):
     text_or_url = re.sub(r"\.(?:html?|php|asp|jsp)\b", " ", text_or_url, flags=re.IGNORECASE)
     text_or_url = text_or_url.replace("-", " ").replace("_", " ").replace("/", " ")
     text_or_url = re.sub(r"\b(?:19|20)\d{2}\b|\b\d{1,2}\b", " ", text_or_url)
+    
+    # Strip common noise/stop words first to prevent them from interrupting vs pattern matching
+    text_or_url = re.sub(r'(?i)\b(am|pm|live|score|preview|prediction|predictions|lineup|telecast|details|stream|free|online|watch|hd|sd|link)\b', ' ', text_or_url)
+    
     text_or_url = re.sub(r"\s+", " ", text_or_url).strip()
 
     # Match strings like Spain vs Peru or France v Northern Ireland
@@ -2051,8 +2055,7 @@ def extract_match_name(text_or_url):
         name = match.group(1).strip()
         # Clean up double spaces, trailing words
         name = re.sub(r'\s+', ' ', name)
-        name = re.sub(r'(?i)^(?:footem\s+in|epicsports|rd9sports|worldcup|90live|live)\s+', '', name).strip()
-        name = re.sub(r'(?i)\b(live|score|preview|prediction|predictions|lineup|telecast|details|stream|free|online|watch|hd|sd|link)\b.*', '', name).strip()
+        name = re.sub(r'(?i)^(?:footem\s+in|epicsports|rd9sports|worldcup|90live)\s+', '', name).strip()
         return name
     return None
 
