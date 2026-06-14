@@ -8,8 +8,10 @@ import math
 from datetime import datetime, timedelta, timezone
 import re
 
-from automation_config import get_portal_blog_config, get_scheduler_config, has_oauth, load_automation_config
+from automation_config import get_fixture_api_config, get_portal_blog_config, get_scheduler_config, has_oauth, load_automation_config
+from fixture_manager import schedule_match_allowed
 from lineup_manager import refresh_lineups_for_match
+from match_metadata import content_hash, refresh_match_metadata
 from pipeline_storage import archive_completed_matches, ensure_runtime_dirs, load_schedule, match_key, save_schedule
 from portal_renderer import (
     IST,
@@ -28,7 +30,6 @@ from portal_renderer import (
 )
 from thumbnail_manager import refresh_thumbnail_url_from_sources, sanitize_thumbnail_fields, thumbnail_path, with_thumbnail_src
 
-SCHEDULE_FILE = "match_schedule.json"
 CONFIG_FILE = "new_blogger_config.json"
 
 # Exact ad code scripts and popup wrappers matching goforsports.net
@@ -230,8 +231,11 @@ def normalize_title(title):
 
 
 MATCH_ALIASES = {
+    "am": "australia",
     "qat": "qatar",
     "qater": "qatar",
+    "cura": "curacao",
+    "curacao": "curacao",
     "switz": "switzerland",
     "swi": "switzerland",
     "scot": "scotland",
@@ -247,7 +251,8 @@ MATCH_ALIASES = {
 
 MATCH_STOP_WORDS = {
     "fifa", "world", "cup", "2026", "match", "preview", "live", "info",
-    "stream", "streaming", "portal", "watch", "and", "the", "vs", "v"
+    "stream", "streaming", "portal", "watch", "and", "the", "vs", "v",
+    "team"
 }
 
 
@@ -936,6 +941,17 @@ def log_dry_run(message):
     print(f"[dry-run] {message}")
 
 
+def rendered_content_changed(match, key, html):
+    hashes = match.get("content_hashes") if isinstance(match.get("content_hashes"), dict) else {}
+    return hashes.get(key) != content_hash(html)
+
+
+def record_content_hash(match, key, html):
+    hashes = match.get("content_hashes") if isinstance(match.get("content_hashes"), dict) else {}
+    hashes[key] = content_hash(html)
+    match["content_hashes"] = hashes
+
+
 def resolve_ist_date_selector(selector, now):
     selector = str(selector or "").strip().lower()
     today = now.astimezone(IST).date()
@@ -1001,8 +1017,8 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Create/update portal Blogger preview posts and streaming pages safely.")
     parser.add_argument("--dry-run", action="store_true", help="Show actions without creating, updating, saving schedule, or generating thumbnails.")
-    parser.add_argument("--create-missing-only", action="store_true", help="Only create missing portal items. Existing Page/Post content is not refreshed. This is the default.")
-    parser.add_argument("--refresh-existing", action="store_true", help="Refresh existing auto-managed portal Page/Post content.")
+    parser.add_argument("--create-missing-only", action="store_true", help="Only create missing portal items. Existing Page/Post content is not refreshed.")
+    parser.add_argument("--refresh-existing", action="store_true", help="Refresh existing auto-managed portal Page/Post content when rendered content changes.")
     parser.add_argument("--for-ist-date", help="Only process matches on an IST calendar date: today, tomorrow, or YYYY-MM-DD.")
     parser.add_argument("--within-hours", type=float, help="Only process matches kicking off within the next N hours from now UTC.")
     args = parser.parse_args()
@@ -1017,7 +1033,6 @@ def main():
         print("[-] --within-hours must be greater than zero.")
         sys.exit(2)
 
-    refresh_existing = bool(args.refresh_existing)
     now = datetime.now(timezone.utc)
     target_ist_date = None
     if args.for_ist_date:
@@ -1027,22 +1042,26 @@ def main():
             print(f"[-] {exc}")
             sys.exit(2)
 
+    automation_config = load_automation_config()
+    config = get_portal_blog_config(automation_config)
+    scheduler_config = get_scheduler_config(automation_config)
+    fixture_config = get_fixture_api_config(automation_config)
+    paths = ensure_runtime_dirs(automation_config)
+    refresh_existing = bool(args.refresh_existing) or (
+        not args.create_missing_only and bool(scheduler_config.get("portal_refresh_on_metadata_changes", True))
+    )
+
     print("[*] Starting Blogger precreate (Posts & Pages) pipeline...")
     if args.dry_run:
         print("[*] Dry run enabled: no Blogger writes, thumbnail writes, or schedule saves will be performed.")
     if refresh_existing:
-        print("[*] Existing auto-managed portal content may be refreshed.")
+        print("[*] Existing auto-managed portal content may be refreshed when rendered content changes.")
     else:
         print("[*] Safe mode: existing portal content will be linked/recorded but not refreshed.")
     if target_ist_date:
         print(f"[*] Scope: matches on IST date {target_ist_date.isoformat()} only.")
     elif args.within_hours is not None:
         print(f"[*] Scope: matches within the next {args.within_hours:g} hour(s) from now UTC.")
-
-    automation_config = load_automation_config()
-    config = get_portal_blog_config(automation_config)
-    scheduler_config = get_scheduler_config(automation_config)
-    paths = ensure_runtime_dirs(automation_config)
 
     if not has_oauth(config):
         print("[-] Portal Blogger OAuth is missing. Configure portal_blog in master_config.json or run auth_blogger.py for new_blogger_config.json.")
@@ -1085,6 +1104,9 @@ def main():
             continue
 
         if match.get("status", "pending") in ("pending", "processing", "active", "live"):
+            if scheduler_config.get("fixture_first_only", True) and not schedule_match_allowed(match, fixture_config):
+                skipped_by_scope += 1
+                continue
             if target_ist_date and not match_in_ist_date(match, target_ist_date):
                 skipped_by_scope += 1
                 continue
@@ -1100,6 +1122,9 @@ def main():
             match["match_key"] = match.get("match_key") or match_key(match)
             safe_name = slugify_match_name(match["match_name"])
             can_refresh = can_refresh_portal_content(match, scheduler_config, now)
+            if refresh_match_metadata(match, scheduler_config, now, active=False):
+                print(f"[*] Metadata checked/updated for: {match['match_name']}")
+                changed = True
 
             # Step 1: Generate Match-Specific Thumbnail image before rendering any Blogger HTML.
             img_path = thumbnail_path(automation_config, match)
@@ -1155,10 +1180,12 @@ def main():
                     page_title = streaming_page_title(render_match, config)
                     changed = True
             page_html = generate_page_html(config, render_match, safe_name)
+            page_changed = rendered_content_changed(match, "stream_page", page_html)
             
             if not page_id:
                 print(f"\n[*] Checking stream Page for: {match['match_name']}...")
                 try:
+                    page_written = False
                     existing_page_id, existing_page_url = find_existing_blogger_page(config, access_token, page_title, match["match_name"])
                     if existing_page_id:
                         print(f"[*] Found existing stream Page. ID: {existing_page_id}")
@@ -1169,12 +1196,15 @@ def main():
                         existing_title_match = with_thumbnail_src(automation_config, config, existing_title_match)
                         page_title = streaming_page_title(existing_title_match, config)
                         page_html = generate_page_html(config, existing_title_match, safe_name)
-                        if refresh_existing and can_refresh:
+                        page_changed = rendered_content_changed(match, "stream_page", page_html)
+                        if refresh_existing and can_refresh and page_changed:
                             if args.dry_run:
                                 log_dry_run(f"Would refresh existing stream Page for {match['match_name']} ({page_id}).")
                                 changed = True
                             else:
                                 page_url = update_blogger_page(config, access_token, page_id, page_title, page_html)
+                                record_content_hash(match, "stream_page", page_html)
+                                page_written = True
                         else:
                             print("[*] Existing stream Page content left unchanged.")
                     else:
@@ -1184,11 +1214,14 @@ def main():
                             page_id, page_url = "", ""
                         else:
                             page_id, page_url = create_stream_blogger_page(config, access_token, render_match, page_title, page_html)
+                            page_written = True
                     if page_id and not args.dry_run:
                         match["new_blogger_page_id"] = page_id
                         match["new_blogger_page_url"] = page_url
                         match["new_blog_iframe_set"] = False
                         match["new_blog_prepare_set"] = False
+                        if page_written:
+                            record_content_hash(match, "stream_page", page_html)
                         changed = True
                     elif page_id:
                         log_dry_run(f"Would record stream Page ID/URL for {match['match_name']}: {page_id} | {page_url}")
@@ -1202,6 +1235,8 @@ def main():
                 print(f"\n[*] Skipping stream Page refresh for active/live match: {match['match_name']}")
             elif not refresh_existing:
                 print(f"\n[*] Existing stream Page left unchanged for: {match['match_name']} (ID: {page_id})")
+            elif not page_changed:
+                print(f"\n[*] Existing stream Page already current for: {match['match_name']} (ID: {page_id})")
             else:
                 print(f"\n[*] Refreshing existing stream Page for: {match['match_name']} (ID: {page_id})...")
                 try:
@@ -1213,6 +1248,7 @@ def main():
                         match["new_blogger_page_url"] = page_url
                         match["new_blog_iframe_set"] = False
                         match["new_blog_prepare_set"] = False
+                        record_content_hash(match, "stream_page", page_html)
                         print(f"[+] Page content refreshed. URL: {page_url}")
                         changed = True
                 except Exception as e:
@@ -1223,16 +1259,19 @@ def main():
             post_title = preview_post_title(render_match, config)
             post_html = generate_post_html(config, render_match, safe_name)
             post_id = match.get("new_blogger_post_id")
+            post_changed = rendered_content_changed(match, "preview_post", post_html)
             
             if not post_id:
                 print(f"[*] Checking preview Post for: {match['match_name']}...")
                 try:
+                    post_written = False
                     existing_post_id, existing_post_url = find_existing_blogger_post(config, access_token, post_title, match["match_name"])
                     if existing_post_id:
                         print(f"[*] Found existing preview Post. ID: {existing_post_id}")
                         post_id = existing_post_id
                         post_url = existing_post_url
-                        if refresh_existing and can_refresh:
+                        post_changed = rendered_content_changed(match, "preview_post", post_html)
+                        if refresh_existing and can_refresh and post_changed:
                             if args.dry_run:
                                 log_dry_run(f"Would refresh existing preview Post for {match['match_name']} ({post_id}).")
                                 changed = True
@@ -1246,6 +1285,8 @@ def main():
                                     published=publish_overrides.get(match["match_key"]),
                                     preserve_existing_thumbnail=True,
                                 )
+                                record_content_hash(match, "preview_post", post_html)
+                                post_written = True
                         else:
                             print("[*] Existing preview Post content left unchanged.")
                     else:
@@ -1255,9 +1296,12 @@ def main():
                             post_id, post_url = "", ""
                         else:
                             post_id, post_url = create_blogger_post(config, access_token, post_title, post_html)
+                            post_written = True
                     if post_id and not args.dry_run:
                         match["new_blogger_post_id"] = post_id
                         match["new_blogger_post_url"] = post_url
+                        if post_written:
+                            record_content_hash(match, "preview_post", post_html)
                         changed = True
                     elif post_id:
                         log_dry_run(f"Would record preview Post ID/URL for {match['match_name']}: {post_id} | {post_url}")
@@ -1270,6 +1314,8 @@ def main():
                 print(f"[*] Skipping preview Post refresh for active/live match: {match['match_name']}")
             elif not refresh_existing:
                 print(f"[*] Existing preview Post left unchanged for: {match['match_name']} (ID: {post_id})")
+            elif not post_changed:
+                print(f"[*] Existing preview Post already current for: {match['match_name']} (ID: {post_id})")
             else:
                 print(f"[*] Refreshing existing preview Post for: {match['match_name']} (ID: {post_id})...")
                 try:
@@ -1287,6 +1333,7 @@ def main():
                             preserve_existing_thumbnail=True,
                         )
                         match["new_blogger_post_url"] = post_url
+                        record_content_hash(match, "preview_post", post_html)
                         print(f"[+] Post content refreshed. URL: {post_url}")
                         changed = True
                 except Exception as e:

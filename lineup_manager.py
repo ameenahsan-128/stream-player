@@ -43,12 +43,21 @@ STOP_KEYWORDS = (
 
 
 def source_urls_for_match(match):
-    value = match.get("source_url", "")
-    if isinstance(value, list):
-        return [str(url).strip() for url in value if str(url).strip()]
-    if isinstance(value, str) and value.strip():
-        return [value.strip()]
-    return []
+    values = []
+    for field in ("metadata_urls", "metadata_url", "fixture_source_url", "lineup_source_url"):
+        value = match.get(field)
+        if isinstance(value, list):
+            values.extend(str(url).strip() for url in value if str(url).strip())
+        elif isinstance(value, str) and value.strip():
+            values.append(value.strip())
+    seen = set()
+    result = []
+    for url in values:
+        key = url.rstrip("/")
+        if key and key not in seen:
+            seen.add(key)
+            result.append(url)
+    return result
 
 
 def html_to_lines(html):

@@ -400,13 +400,22 @@ def preview_post_title(match, config=None):
 
 
 def streaming_page_title(match, config=None):
+    ctx = get_match_context(config or {}, match)
     team = get_prominent_team(config or {}, match)
     team_code = get_team_title_code(config or {}, team)
     title_format = (config or {}).get("streaming_page_title_format") or "{team_code} INFO"
+    competition = get_match_genre(match, config or {}) or ctx["league"]
     return (
         str(title_format)
+        .replace("{match}", ctx["match_name"])
+        .replace("{team1}", ctx["team1"])
+        .replace("{team2}", ctx["team2"])
         .replace("{team}", team)
         .replace("{team_code}", team_code)
+        .replace("{competition}", competition)
+        .replace("{stage}", normalize_info_value(match.get("stage")))
+        .replace("{group}", normalize_info_value(match.get("group")))
+        .replace("{date}", ctx["date"])
         .strip()
         or f"{team_code} INFO"
     )
@@ -624,8 +633,94 @@ def render_channel_country_table(ctx, match, config):
 """
 
 
+def result_info(match):
+    result = match.get("result") if isinstance(match.get("result"), dict) else {}
+    if result.get("team1_score") is None or result.get("team2_score") is None:
+        if result.get("status") == "final_unverified":
+            return {"status": "final_unverified", "label": "Final Score", "text": "Final score is not verified yet."}
+        return {}
+    status = str(result.get("status") or "").lower()
+    if status == "final":
+        label = "Final Score"
+    elif status == "live":
+        label = "Live Score"
+    else:
+        label = "Score Update"
+    return {
+        "status": status,
+        "label": label,
+        "text": result.get("score_text") or f"{match.get('team1', '')} {result.get('team1_score')}-{result.get('team2_score')} {match.get('team2', '')}",
+        "source_url": result.get("source_url") or "",
+        "checked_at": result.get("checked_at") or "",
+    }
+
+
+def render_result_banner(ctx, match):
+    info = result_info(match)
+    if not info:
+        return ""
+    color = "#006600"
+    bg = "#eef8ee"
+    if info["status"] == "live":
+        color = "#b00020"
+        bg = "#fff0f0"
+    elif info["status"] == "final_unverified":
+        color = "#7a5200"
+        bg = "#fff8e8"
+    return f"""
+  <div style="background:{bg}; border:1px solid {color}; border-radius:6px; color:{color}; font-weight:900; line-height:1.45; margin:10px 0; padding:12px; text-align:center;">
+    <div style="font-size:12px; letter-spacing:.7px; text-transform:uppercase;">{escape(info["label"])}</div>
+    <div style="font-size:20px; margin-top:4px;">{escape(info["text"])}</div>
+  </div>
+"""
+
+
 def render_countdown(match, safe_name):
-    return ""
+    if str(match.get("status") or "").lower() in ("completed", "ended"):
+        return ""
+    if result_info(match).get("status") in ("final", "final_unverified"):
+        return ""
+    kickoff = str(match.get("match_time") or "").strip()
+    if not kickoff:
+        return ""
+    element_id = "gfs-countdown-" + re.sub(r"[^a-z0-9_-]+", "-", safe_name.lower()).strip("-")
+    return f"""
+  <div id="{escape(element_id, quote=True)}" data-kickoff="{escape(kickoff, quote=True)}" style="background:#fff7d6; border:1px solid #f4c430; border-radius:6px; color:#111111; font-weight:900; line-height:1.35; margin:0 0 12px; padding:10px 12px; text-align:center;">
+    <span style="display:block; font-size:11px; letter-spacing:.7px; text-transform:uppercase;">Match Countdown</span>
+    <span data-countdown-text="1" style="display:block; font-size:18px; margin-top:3px;">Loading countdown...</span>
+  </div>
+  <script type="text/javascript">
+  (function() {{
+    var box = document.getElementById({json.dumps(element_id)});
+    if (!box) return;
+    var target = new Date(box.getAttribute('data-kickoff')).getTime();
+    var text = box.querySelector('[data-countdown-text]');
+    function pad(value) {{ return value < 10 ? '0' + value : String(value); }}
+    function tick() {{
+      var diff = target - Date.now();
+      if (!isFinite(diff)) {{
+        text.textContent = 'Kickoff time updating';
+        return;
+      }}
+      if (diff <= 0) {{
+        text.textContent = 'Links activating now';
+        box.style.background = '#eaffea';
+        box.style.borderColor = '#00a651';
+        box.style.color = '#005a20';
+        return;
+      }}
+      var total = Math.floor(diff / 1000);
+      var days = Math.floor(total / 86400);
+      var hours = Math.floor((total % 86400) / 3600);
+      var mins = Math.floor((total % 3600) / 60);
+      var secs = total % 60;
+      text.textContent = (days ? days + 'd ' : '') + pad(hours) + 'h ' + pad(mins) + 'm ' + pad(secs) + 's';
+    }}
+    tick();
+    setInterval(tick, 1000);
+  }})();
+  </script>
+"""
 
 
 def render_status_pill(state):
@@ -829,13 +924,16 @@ def render_lineup_table(ctx, match):
     text_html = render_lineup_paragraphs(text)
     if not text_html:
         text_html = '<p style="margin:6px 0;"><b>Lineup information will be updated when available.</b></p>'
+    score = result_info(match)
+    score_header = score.get("label", "Score Prediction").upper()
+    score_text = score.get("text") or f"{ctx['team1']} vs {ctx['team2']} - Prediction will be updated close to kickoff."
     return f"""
   <table border="0" cellpadding="0" cellspacing="0" style="background-color:white; border-collapse:collapse; border:1px solid #000000; color:black; text-align:center; width:100%; margin:0;">
     <tbody>
       <tr><td colspan="2" style="background:#006600; border:1px solid #000000; padding:8px;"><span style="color:white; font-size:medium; font-weight:bold;">{header}</span></td></tr>
       <tr><td colspan="2" style="border:1px solid #000000; padding:14px; text-align:left; line-height:1.65; font-size:14px;">{text_html}</td></tr>
-      <tr><td colspan="2" style="background:#006600; border:1px solid #000000; padding:8px;"><span style="color:white; font-size:medium; font-weight:bold;">SCORE PREDICTION</span></td></tr>
-      <tr><td colspan="2" style="border:1px solid #000000; padding:12px;"><b>{escape(ctx["team1"])} vs {escape(ctx["team2"])} - Prediction will be updated close to kickoff.</b></td></tr>
+      <tr><td colspan="2" style="background:#006600; border:1px solid #000000; padding:8px;"><span style="color:white; font-size:medium; font-weight:bold;">{escape(score_header)}</span></td></tr>
+      <tr><td colspan="2" style="border:1px solid #000000; padding:12px;"><b>{escape(score_text)}</b></td></tr>
     </tbody>
   </table>
 """
@@ -893,6 +991,7 @@ def render_preview_post(config, match):
 """
     body = f"""
   {portal_row(render_match_table(ctx, include_channels=False), padding="0")}
+  {portal_row(render_result_banner(ctx, match), padding="10px")}
   {portal_row(render_lineup_table(ctx, match), padding="0")}
   {portal_text_row("Match Preview", [
       f"{ctx['team1']} vs {ctx['team2']} is scheduled for {ctx['date']} at {ctx['time']}, bringing together two sides with very different strengths.",
@@ -942,20 +1041,15 @@ def render_page_hero_image(config, match, ctx):
 def render_streaming_page(config, match, state="upcoming", links_html=""):
     ctx = get_match_context(config, match)
     image_html = render_page_hero_image(config, match, ctx)
+    countdown_html = render_countdown(match, slugify_match_name(ctx["match_name"]))
+    result_html = render_result_banner(ctx, match)
     link_notice = f"""
   <div style="background:#fff7d6; border:2px solid #f4c430; color:#111111; border-radius:6px; padding:13px 14px; margin:0 0 14px; text-align:center; font-weight:900; line-height:1.5; text-transform:uppercase;">
     {escape(ctx["team1"])} vs {escape(ctx["team2"])} match links are added 15 minutes prior to kickoff.
   </div>
 """
     if state == "live" and links_html:
-        post_url = match.get("blogger_post_url") or match.get("player_slot_url") or config.get("master_player_url") or ""
         player_iframe = ""
-        if post_url:
-            player_iframe = f"""
-  <div id="player-frame-container" style="background:#000000; border-radius:12px; overflow:hidden; border:1px solid #cccccc; margin:18px 0; aspect-ratio:16/9; width:100%;">
-    <iframe src="{escape(post_url, quote=True)}" width="100%" height="100%" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="display:block; background:#000000; border:0;"></iframe>
-  </div>
-"""
         stream_block = f"""
   {player_iframe}
   <div id="links-container" style="background:#ffffff; border:1px solid #cccccc; border-radius:6px; padding:12px; margin:18px 0; text-align:center;">
@@ -971,9 +1065,11 @@ def render_streaming_page(config, match, state="upcoming", links_html=""):
   </div>
 """
     elif state == "ended":
-        stream_block = """
+        ended_score = result_html or '<div style="font-weight:900;">Final score will be updated after verification.</div>'
+        stream_block = f"""
   <div id="player-frame-container" style="background:#f5f5f5; border:1px solid #dddddd; border-radius:6px; padding:20px; margin:18px 0; text-align:center; color:#555555; font-weight:800;">
     Match coverage has ended.
+    {ended_score}
   </div>
 """
     else:
@@ -988,9 +1084,10 @@ def render_streaming_page(config, match, state="upcoming", links_html=""):
   {portal_header_row("Match Coverage")}
   {portal_row(f'<div style="font-size:14px; line-height:1.6; color:#444444;">{escape(ctx["match_name"])} coverage page with broadcast information and streaming buttons when active.</div>', padding="10px")}
   {portal_row(render_channel_country_table(ctx, match, config), padding="0")}
+  {portal_row(result_html, padding="10px")}
   {portal_row(render_square_ad(config), padding="12px")}
   {portal_header_row("Streaming Links", bg="#000000")}
-  {portal_row(stream_block, padding="12px")}
+  {portal_row(countdown_html + stream_block, padding="12px")}
   {render_page_lineup_section(ctx, match)}
   {portal_row(render_smartlink_button(config), padding="12px")}
 """

@@ -1,15 +1,60 @@
 [
   {
-    "match_name": "Team A Vs Team B",
-    "match_time": "2026-06-13T19:00:00Z",
+    "fixture_id": "fifa_world_cup_2026_20260614_1700_germany_curacao",
+    "competition": "FIFA World Cup 2026",
+    "season": "2026",
+    "stage": "Group Stage",
+    "group": "E",
+    "team1": "Germany",
+    "team2": "Curacao",
+    "match_name": "Germany Vs Curacao",
+    "match_time": "2026-06-14T17:00:00Z",
     "source_url": [
-      "https://www.rd9sports.pro/2026/06/team-a-vs-team-b.html",
-      "https://worldcup.epicsports.mobi/2026/06/team-a-team-b.html"
+      "https://worldcup.epicsports.mobi/2026/06/germany-curacao.html",
+      "https://worldcup.epicsports.co.in/2026/06/germany-curacao.html"
     ],
+    "source_records": [
+      {
+        "url": "https://worldcup.epicsports.mobi/2026/06/germany-curacao.html",
+        "domain": "worldcup.epicsports.mobi",
+        "score": 2,
+        "discovered_at": "2026-06-14T00:00:00Z",
+        "last_success_at": "",
+        "fail_count": 0
+      }
+    ],
+    "metadata_urls": [
+      "https://www.fifa.com/fifaplus/en/tournaments/mens/worldcup/canadamexicousa2026"
+    ],
+    "metadata_records": [
+      {
+        "url": "https://www.fifa.com/fifaplus/en/tournaments/mens/worldcup/canadamexicousa2026",
+        "domain": "fifa.com",
+        "role": "metadata",
+        "discovered_at": "2026-06-14T00:00:00Z",
+        "last_success_at": "",
+        "fail_count": 0
+      }
+    ],
+    "lineups": {
+      "status": "predicted",
+      "text": "Germany possible lineup: To be updated.",
+      "source_url": "https://www.fifa.com/fifaplus/en/tournaments/mens/worldcup/canadamexicousa2026",
+      "checked_at": "2026-06-14T00:00:00Z"
+    },
+    "result": {
+      "status": "scheduled",
+      "score_text": "",
+      "source_url": "",
+      "checked_at": ""
+    },
+    "content_hashes": {
+      "preview_post": "",
+      "stream_page": ""
+    },
     "status": "pending",
     "portal_mode": "auto",
-    "league": "Live Sports",
-    "venue": "TBA",
+    "venue": "Houston Stadium",
     "channels": "Channel details will be updated before kickoff."
   }
 ]

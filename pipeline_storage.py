@@ -6,7 +6,6 @@ from pathlib import Path
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-LEGACY_SCHEDULE_FILE = "match_schedule.json"
 DEFAULT_DATA_DIR = "data"
 DEFAULT_SCHEDULE_FILE = os.path.join(DEFAULT_DATA_DIR, "match_schedule.json")
 DEFAULT_HISTORY_DIR = os.path.join(DEFAULT_DATA_DIR, "history")
@@ -76,10 +75,6 @@ def load_schedule(config=None, migrate_from_legacy=True):
     schedule = read_json(paths["schedule_file"], None)
     if isinstance(schedule, list):
         return schedule
-    if migrate_from_legacy and paths["schedule_file"] != LEGACY_SCHEDULE_FILE:
-        legacy_schedule = read_json(LEGACY_SCHEDULE_FILE, None)
-        if isinstance(legacy_schedule, list):
-            return legacy_schedule
     return []
 
 
@@ -111,8 +106,54 @@ def strip_runtime_fields(match):
     return cleaned
 
 
-def archive_completed_matches(schedule, config=None, scheduler_config=None, now=None):
+def archive_identity(match):
+    return str(match.get("fixture_id") or match.get("match_key") or match_key(match))
+
+
+def archive_entries(entries, config=None, now=None, reason="completed"):
     paths = ensure_runtime_dirs(config)
+    now = now or datetime.now(timezone.utc)
+    grouped = {}
+    for match in entries or []:
+        try:
+            bucket = parse_time(match.get("match_time")).astimezone(IST).strftime("%Y-%m")
+        except Exception:
+            bucket = now.astimezone(IST).strftime("%Y-%m")
+        entry = dict(match)
+        entry["archived_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry["archive_reason"] = reason
+        entry["match_key"] = entry.get("match_key") or match_key(match)
+        entry["_archive_identity"] = archive_identity(entry)
+        grouped.setdefault(bucket, []).append(entry)
+
+    written = []
+    for bucket, bucket_entries in grouped.items():
+        history_path = os.path.join(paths["history_dir"], f"{bucket}.jsonl")
+        Path(history_path).parent.mkdir(parents=True, exist_ok=True)
+        existing = set()
+        if os.path.exists(history_path):
+            with open(history_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        existing_entry = json.loads(line)
+                    except Exception:
+                        continue
+                    existing.add(
+                        str(existing_entry.get("_archive_identity") or archive_identity(existing_entry))
+                    )
+        with open(history_path, "a", encoding="utf-8") as f:
+            for entry in bucket_entries:
+                identity = str(entry.get("_archive_identity") or archive_identity(entry))
+                if identity in existing:
+                    continue
+                f.write(json.dumps(entry, ensure_ascii=True, sort_keys=True) + "\n")
+                existing.add(identity)
+                written.append(entry)
+    return written
+
+
+def archive_completed_matches(schedule, config=None, scheduler_config=None, now=None):
+    ensure_runtime_dirs(config)
     now = now or datetime.now(timezone.utc)
     scheduler_config = scheduler_config or (config or {}).get("scheduler", {})
     active = []
@@ -120,12 +161,6 @@ def archive_completed_matches(schedule, config=None, scheduler_config=None, now=
 
     for match in schedule:
         should_archive = match.get("status") == "completed"
-        if not should_archive:
-            try:
-                _, run_end, _ = active_window(match, scheduler_config)
-                should_archive = now > run_end and match.get("status") in ("ended", "done")
-            except Exception:
-                should_archive = False
         if should_archive:
             archived.append(match)
         else:
@@ -134,22 +169,6 @@ def archive_completed_matches(schedule, config=None, scheduler_config=None, now=
     if not archived:
         return active, []
 
-    grouped = {}
-    for match in archived:
-        try:
-            bucket = parse_time(match.get("match_time")).astimezone(IST).strftime("%Y-%m")
-        except Exception:
-            bucket = now.astimezone(IST).strftime("%Y-%m")
-        entry = dict(match)
-        entry["archived_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-        entry["match_key"] = entry.get("match_key") or match_key(match)
-        grouped.setdefault(bucket, []).append(entry)
-
-    for bucket, entries in grouped.items():
-        history_path = os.path.join(paths["history_dir"], f"{bucket}.jsonl")
-        Path(history_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(history_path, "a", encoding="utf-8") as f:
-            for entry in entries:
-                f.write(json.dumps(entry, ensure_ascii=True, sort_keys=True) + "\n")
+    archive_entries(archived, config=config, now=now, reason="completed")
 
     return active, archived

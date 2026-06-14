@@ -79,6 +79,25 @@ DEFAULT_TRUSTED_SOURCE_DOMAINS = [
     "es.footem.in"
 ]
 
+DEFAULT_METADATA_DOMAINS = [
+    "fifa.com",
+    "www.fifa.com",
+    "espn.com",
+    "www.espn.com",
+    "bbc.com",
+    "www.bbc.com",
+    "bbc.co.uk",
+    "www.bbc.co.uk",
+    "skysports.com",
+    "www.skysports.com",
+    "fotmob.com",
+    "www.fotmob.com",
+    "sofascore.com",
+    "www.sofascore.com",
+    "wikipedia.org",
+    "en.wikipedia.org",
+]
+
 DEFAULT_SCHEDULER_CONFIG = {
     "data_dir": DEFAULT_DATA_DIR,
     "schedule_file": DEFAULT_SCHEDULE_FILE,
@@ -96,15 +115,32 @@ DEFAULT_SCHEDULER_CONFIG = {
     "post_kickoff_fast_cooldown_minutes": 2,
     "post_kickoff_cooldown_minutes": 3,
     "loop_interval_seconds": 60,
+    "fixture_sync_interval_seconds": 3600,
+    "fixture_first_only": True,
+    "auto_create_matches_from_discovery": False,
     "auto_discover_interval_seconds": 1800,
     "source_refresh_interval_seconds": 1800,
-    "portal_precreate_hours_before": 24,
+    "portal_precreate_hours_before": 72,
     "source_discovery_hours_before": 24,
     "lineup_refresh_enabled": True,
     "lineup_refresh_interval_minutes": 180,
     "lineup_active_refresh_interval_minutes": 5,
     "lineup_refresh_max_sources": 4,
     "lineup_refresh_timeout_seconds": 10,
+    "metadata_refresh_enabled": True,
+    "metadata_refresh_interval_minutes": 60,
+    "metadata_active_refresh_interval_minutes": 10,
+    "metadata_refresh_max_sources": 5,
+    "metadata_refresh_timeout_seconds": 12,
+    "metadata_search_enabled": True,
+    "metadata_search_provider": "google",
+    "metadata_search_interval_hours": 6,
+    "metadata_search_max_results": 4,
+    "metadata_search_timeout_seconds": 10,
+    "score_refresh_interval_minutes": 10,
+    "completion_score_grace_hours": 12,
+    "metadata_trusted_domains": DEFAULT_METADATA_DOMAINS,
+    "portal_refresh_on_metadata_changes": True,
     "source_thumbnail_enabled": False,
     "source_thumbnail_max_sources": 3,
     "source_thumbnail_timeout_seconds": 10,
@@ -117,6 +153,19 @@ DEFAULT_SCHEDULER_CONFIG = {
     "auto_discover_portals": DEFAULT_DISCOVERY_PORTALS,
     "discovery_portals": DEFAULT_DISCOVERY_PORTALS,
     "trusted_source_domains": DEFAULT_TRUSTED_SOURCE_DOMAINS
+}
+
+DEFAULT_FIXTURE_API_CONFIG = {
+    "enabled": True,
+    "mode": "world_cup",
+    "provider": "local_file",
+    "fixture_file": "data/fixtures/worldcup_2026.json",
+    "url": "",
+    "allow_http_api": False,
+    "mock_fallback": "",
+    "allow_mock_fallback": False,
+    "prune_unsynced": True,
+    "merge_tolerance_hours": 18
 }
 
 DEFAULT_SHARED_SOCIAL_CONFIG = {
@@ -231,6 +280,7 @@ def legacy_player_blog_config():
         "post_id": legacy.get("post_id", ""),
         "post_title": legacy.get("post_title", "Live Stream Player"),
         "player_slots": slots,
+        "create_dedicated_player_posts": legacy.get("create_dedicated_player_posts", True),
         "ads": {},
         "auto_discover_portals": legacy.get("auto_discover_portals", DEFAULT_DISCOVERY_PORTALS)
     }
@@ -288,7 +338,8 @@ def load_automation_config(master_path=MASTER_CONFIG_FILE):
         "portal_blog": legacy_portal_blog_config(),
         "shared_social": copy.deepcopy(DEFAULT_SHARED_SOCIAL_CONFIG),
         "shared_smartlink": copy.deepcopy(DEFAULT_SHARED_SMARTLINK_CONFIG),
-        "scheduler": copy.deepcopy(DEFAULT_SCHEDULER_CONFIG)
+        "scheduler": copy.deepcopy(DEFAULT_SCHEDULER_CONFIG),
+        "fixture_api": copy.deepcopy(DEFAULT_FIXTURE_API_CONFIG)
     }
 
     config["player_blog"] = merge_missing(master.get("player_blog", {}), config["player_blog"])
@@ -296,6 +347,7 @@ def load_automation_config(master_path=MASTER_CONFIG_FILE):
     config["shared_social"] = merge_missing(master.get("shared_social", {}), config["shared_social"])
     config["shared_smartlink"] = merge_missing(master.get("shared_smartlink", {}), config["shared_smartlink"])
     config["scheduler"] = merge_missing(master.get("scheduler", {}), config["scheduler"])
+    config["fixture_api"] = merge_missing(master.get("fixture_api", {}), config["fixture_api"])
 
     config["portal_blog"]["ads"] = merge_missing(config["portal_blog"].get("ads", {}), DEFAULT_PORTAL_ADS)
     config["player_blog"]["ads"] = merge_missing(config["player_blog"].get("ads", {}), DEFAULT_PLAYER_ADS)
@@ -336,6 +388,8 @@ def load_automation_config(master_path=MASTER_CONFIG_FILE):
         config["scheduler"]["source_refresh_interval_seconds"] = config["scheduler"].get("auto_discover_interval_seconds", 1800)
     if not config["scheduler"].get("trusted_source_domains"):
         config["scheduler"]["trusted_source_domains"] = DEFAULT_TRUSTED_SOURCE_DOMAINS
+    if not config["scheduler"].get("metadata_trusted_domains"):
+        config["scheduler"]["metadata_trusted_domains"] = DEFAULT_METADATA_DOMAINS
 
     config["scheduler"]["discovery_portals"] = merge_unique_lists(
         config["scheduler"].get("discovery_portals"),
@@ -343,6 +397,7 @@ def load_automation_config(master_path=MASTER_CONFIG_FILE):
     )
     config["scheduler"]["auto_discover_portals"] = config["scheduler"]["discovery_portals"]
     config["scheduler"]["trusted_source_domains"] = merge_unique_lists(config["scheduler"].get("trusted_source_domains"))
+    config["scheduler"]["metadata_trusted_domains"] = merge_unique_lists(config["scheduler"].get("metadata_trusted_domains"))
 
     if not config["player_blog"].get("player_slots") and config["player_blog"].get("post_id"):
         config["player_blog"]["player_slots"] = [{
@@ -392,6 +447,10 @@ def get_portal_blog_config(config):
 
 def get_scheduler_config(config):
     return copy.deepcopy((config or {}).get("scheduler", DEFAULT_SCHEDULER_CONFIG))
+
+
+def get_fixture_api_config(config):
+    return merge_missing((config or {}).get("fixture_api", {}), DEFAULT_FIXTURE_API_CONFIG)
 
 
 def get_player_slots(config):

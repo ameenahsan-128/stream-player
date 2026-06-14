@@ -11,6 +11,7 @@ import fcntl
 from urllib.parse import urlparse, urljoin, urlunparse
 
 from automation_config import (
+    get_fixture_api_config,
     get_player_blog_config,
     get_player_slots,
     get_portal_blog_config,
@@ -18,7 +19,15 @@ from automation_config import (
     has_oauth,
     load_automation_config,
 )
+from fixture_manager import schedule_match_allowed, source_record
 from lineup_manager import refresh_lineups_for_match
+from match_metadata import (
+    completion_grace_expired,
+    content_hash,
+    final_score_text,
+    refresh_match_metadata,
+    result_is_final,
+)
 from pipeline_storage import (
     archive_completed_matches,
     ensure_runtime_dirs,
@@ -38,7 +47,6 @@ from portal_renderer import (
 from precreate_posts import create_stream_blogger_page, find_existing_blogger_page, is_manual_portal_match, update_blogger_page
 from thumbnail_manager import with_thumbnail_src
 
-SCHEDULE_FILE = "match_schedule.json"
 CONFIG_FILE = "blogger_config.json"
 SCHEDULER_STATE_FILE = "scheduler_state.json"
 
@@ -489,6 +497,12 @@ def dedicated_player_post_id(match, slots):
     return post_id
 
 
+def record_content_hash(match, key, html):
+    hashes = match.get("content_hashes") if isinstance(match.get("content_hashes"), dict) else {}
+    hashes[key] = content_hash(html)
+    match["content_hashes"] = hashes
+
+
 def update_portal_match_page(automation_config, new_config, new_token, match, state, links_html=""):
     if is_manual_portal_match(match):
         print(f"[*] Skipping manual portal update for {match['match_name']} as state={state}.")
@@ -517,6 +531,7 @@ def update_portal_match_page(automation_config, new_config, new_token, match, st
         match["new_blogger_page_id"] = page_id
 
     match["new_blogger_page_url"] = page_url
+    record_content_hash(match, "stream_page", page_html)
     return page_url
 
 last_discovery_time = 0
@@ -624,7 +639,7 @@ def source_urls_for_match(match):
     return []
 
 
-def append_source_to_match(match, source_url, max_sources):
+def append_source_to_match(match, source_url, max_sources, score=0):
     urls = source_urls_for_match(match)
     canon_existing = {canonical_url(u) for u in urls}
     canon_new = canonical_url(source_url)
@@ -634,7 +649,29 @@ def append_source_to_match(match, source_url, max_sources):
         return False
     urls.append(source_url)
     match["source_url"] = urls if len(urls) > 1 else urls[0]
+    records = match.get("source_records") if isinstance(match.get("source_records"), list) else []
+    if not any(canonical_url(record.get("url") or "") == canon_new for record in records if isinstance(record, dict)):
+        records.append(source_record(source_url, score=score))
+        match["source_records"] = records
     return True
+
+
+def mark_source_success(match, urls):
+    records = match.get("source_records") if isinstance(match.get("source_records"), list) else []
+    if not records:
+        return
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    success_keys = {canonical_url(url) for url in urls or []}
+    changed = False
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if canonical_url(record.get("url") or "") in success_keys:
+            record["last_success_at"] = now
+            record["fail_count"] = 0
+            changed = True
+    if changed:
+        match["source_records"] = records
 
 
 def within_source_discovery_window(match, scheduler_config, now_utc):
@@ -713,8 +750,11 @@ def auto_discover_matches(force=False):
     global last_discovery_time
     now_ts = time.time()
     automation_config = load_automation_config()
+    api_config = get_fixture_api_config(automation_config)
     schedule = load_schedule(automation_config)
     scheduler_config = get_scheduler_config(automation_config)
+    fixture_first_only = bool(scheduler_config.get("fixture_first_only", True)) or bool(api_config.get("enabled", False))
+    allow_auto_create = bool(scheduler_config.get("auto_create_matches_from_discovery", False)) and not fixture_first_only
     interval = int(
         scheduler_config.get("source_refresh_interval_seconds")
         or scheduler_config.get("auto_discover_interval_seconds", 1800)
@@ -741,7 +781,6 @@ def auto_discover_matches(force=False):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     discovered_any = False
     
-    name_to_match = {m["match_name"].lower().strip(): m for m in schedule}
     existing_urls = set()
     for m in schedule:
         for u in source_urls_for_match(m):
@@ -765,7 +804,9 @@ def auto_discover_matches(force=False):
                 matched_existing = None
                 best_score = 0
                 for existing_match in schedule:
-                    if existing_match.get("status") == "completed":
+                    if existing_match.get("status") in ("completed", "ended"):
+                        continue
+                    if fixture_first_only and not schedule_match_allowed(existing_match, api_config):
                         continue
                     try:
                         match_time = parse_time(existing_match["match_time"])
@@ -783,18 +824,20 @@ def auto_discover_matches(force=False):
                 if matched_existing:
                     now_utc = datetime.now(timezone.utc)
                     can_refresh_sources = within_source_discovery_window(matched_existing, scheduler_config, now_utc)
-                    if can_refresh_sources and append_source_to_match(matched_existing, resolved_url, max_sources):
+                    if can_refresh_sources and append_source_to_match(matched_existing, resolved_url, max_sources, score=best_score):
                         existing_urls.add(resolved_url_key)
                         discovered_any = True
                         print(f"[+] Appended source URL to {matched_existing['match_name']}: {resolved_url}")
+                    continue
+
+                if not allow_auto_create:
                     continue
 
                 match_name = extract_match_name_from_candidate(candidate_text)
                 if not match_name:
                     continue
 
-                match_name_lower = match_name.lower().strip()
-                if match_name_lower in name_to_match:
+                if any(m.get("match_name", "").lower().strip() == match_name.lower().strip() for m in schedule):
                     continue
 
                 print(f"[+] Discovered new match: {match_name} -> {resolved_url}")
@@ -892,7 +935,6 @@ def auto_discover_matches(force=False):
                     "status": "pending"
                 }
                 schedule.append(new_match)
-                name_to_match[match_name_lower] = new_match
                 existing_urls.add(resolved_url_key)
                 discovered_any = True
                 print(f"[+] Successfully scheduled match: {match_name} at {time_iso}")
@@ -905,6 +947,29 @@ def auto_discover_matches(force=False):
         print("[+] Schedule saved after discovery.")
 
 def check_and_run():
+    # Sync fixtures first if API is enabled
+    try:
+        automation_config = load_automation_config()
+        api_config = get_fixture_api_config(automation_config)
+        scheduler_config = get_scheduler_config(automation_config)
+        if api_config.get("enabled", False):
+            now_ts = time.time()
+            state = load_scheduler_state(automation_config)
+            interval = int(scheduler_config.get("fixture_sync_interval_seconds") or 3600)
+            last_sync = float(state.get("last_fixture_sync_ts") or 0)
+            if last_sync <= 0 or (now_ts - last_sync) >= interval:
+                print("[*] Running automatic fixture synchronization...")
+                try:
+                    from sync_fixtures import sync_fixtures
+                    sync_fixtures(dry_run=False)
+                    state["last_fixture_sync_ts"] = now_ts
+                    state["last_fixture_sync_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    save_scheduler_state(state, automation_config)
+                except ImportError:
+                    print("[-] Could not import sync_fixtures module.")
+    except Exception as e:
+        print(f"[-] Fixture synchronization failed: {e}")
+
     # Run auto-discovery first
     try:
         auto_discover_matches()
@@ -979,11 +1044,16 @@ def check_and_run():
 
             if should_run:
                 print(f"[*] Starting process/update for active match: {match['match_name']}")
+                metadata_changed = False
                 lineups_changed = False
                 try:
+                    metadata_changed = refresh_match_metadata(match, scheduler_config, now, active=True)
+                    if metadata_changed:
+                        print(f"[*] Metadata checked/updated for active match: {match['match_name']}")
                     lineups_changed = refresh_lineups_for_match(match, scheduler_config, now, active=True)
-                    if lineups_changed:
-                        print(f"[*] Lineup info checked/updated for active match: {match['match_name']}")
+                    if lineups_changed or metadata_changed:
+                        if lineups_changed:
+                            print(f"[*] Lineup info checked/updated for active match: {match['match_name']}")
                         match["new_blog_prepare_set"] = False
                         post_id = str(match.get("new_blogger_post_id") or "").strip()
                         if portal_updates_enabled and post_id:
@@ -1000,11 +1070,12 @@ def check_and_run():
                                     preserve_existing_thumbnail=True,
                                 )
                                 match["new_blogger_post_url"] = post_url
-                                print(f"[+] Preview post refreshed with lineup update: {post_url}")
+                                record_content_hash(match, "preview_post", post_html)
+                                print(f"[+] Preview post refreshed with metadata update: {post_url}")
                             except Exception as e:
-                                print(f"[-] Preview post lineup refresh failed: {e}")
+                                print(f"[-] Preview post metadata refresh failed: {e}")
                 except Exception as e:
-                    print(f"[-] Lineup refresh failed: {e}")
+                    print(f"[-] Metadata/lineup refresh failed: {e}")
                 # Stamp last_run_time NOW (before the scrape) so the cooldown window is
                 # measured from when we started, not when we finished.  This prevents
                 # immediate re-triggers if the scrape itself takes longer than cooldown.
@@ -1017,22 +1088,36 @@ def check_and_run():
                 temp_output = os.path.join(paths["players_dir"], f"player_{slugify_match_name(match['match_name'])}.html")
                 
                 # Step 1: Run generate_player.py to crawl and produce player file
-                source = match["source_url"]
-                if isinstance(source, list):
+                sources = source_urls_for_match(match)
+                if not sources:
+                    print(f"[!] No source URLs available yet for {match['match_name']}; waiting for source discovery.")
+                    if portal_updates_enabled and not match.get("new_blog_prepare_set") and not match.get("new_blog_iframe_set"):
+                        try:
+                            new_token = get_access_token(new_config)
+                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                            match["new_blog_prepare_set"] = True
+                        except Exception as e:
+                            print(f"[-] Portal preparing-state update failed: {e}")
+                    match["status"] = "pending"
+                    changed = True
+                    continue
+
+                if len(sources) > 1:
                     urls_path = os.path.join(paths["data_dir"], "urls.txt")
                     with open(urls_path, "w", encoding="utf-8") as f:
-                        for u in source:
+                        for u in sources:
                             f.write(u + "\n")
                     src_arg = ["-f", urls_path]
-                    print(f"[*] Scraping multiple source URLs: {source}...")
+                    print(f"[*] Scraping multiple source URLs: {sources}...")
                 else:
-                    src_arg = ["-u", source]
-                    print(f"[*] Scraping {source}...")
+                    src_arg = ["-u", sources[0]]
+                    print(f"[*] Scraping {sources[0]}...")
                 try:
                     cmd = ["python3", "generate_player.py"] + src_arg + ["-o", temp_output]
                     res = subprocess.run(cmd, capture_output=True, text=True, check=True)
                     print(f"[+] Scraping successful. Generated {temp_output}")
                     match["scrape_fail_count"] = 0  # Reset failure counter on success
+                    mark_source_success(match, sources)
                 except Exception as e:
                     print(f"[-] Scraping failed: {e}")
                     # Increment failure counter for backoff logic
@@ -1087,8 +1172,27 @@ def check_and_run():
                             match.pop("player_slot_id", None)
                             match.pop("player_slot_post_id", None)
                         else:
-                            slot = select_player_slot(match, schedule, player_slots, now, scheduler_config)
-                            if not slot:
+                            if config.get("create_dedicated_player_posts", True):
+                                try:
+                                    post_title = match["match_name"] + " Live Stream"
+                                    print(f"[*] Creating dedicated player post for {match['match_name']}...")
+                                    post_id, post_url = create_blogger_post(config, token, post_title, player_html)
+                                    print(f"[+] Dedicated player post created successfully! URL: {post_url}")
+                                    match["blogger_post_id"] = post_id
+                                    match["blogger_post_url"] = post_url
+                                    match["player_slot_url"] = post_url
+                                    match.pop("player_slot_id", None)
+                                    match.pop("player_slot_post_id", None)
+                                    match.pop("iframe_embed_code", None)
+                                    slot = None
+                                except Exception as e:
+                                    print(f"[-] Dedicated player post creation failed; falling back to slot pool: {e}")
+                                    post_url = None
+                                    slot = select_player_slot(match, schedule, player_slots, now, scheduler_config)
+                            else:
+                                slot = select_player_slot(match, schedule, player_slots, now, scheduler_config)
+
+                            if not post_url and not slot:
                                 print(f"[!] No free player slot available for {match['match_name']}.")
                                 # Only set preparing if neither live nor preparing state is already set
                                 if portal_updates_enabled and not match.get("new_blog_iframe_set") and not match.get("new_blog_prepare_set"):
@@ -1102,16 +1206,17 @@ def check_and_run():
                                 changed = True
                                 continue
 
-                            post_title = slot.get("title") or (match["match_name"] + " Live Stream")
-                            post_id = slot["post_id"]
-                            print(f"[*] Updating player slot {slot['id']} ({post_id})...")
-                            post_url = update_blogger_post(config, token, post_id, post_title, player_html)
-                            print(f"[+] Player slot updated successfully! URL: {post_url}")
-                            match["player_slot_id"] = slot["id"]
-                            match["player_slot_post_id"] = post_id
-                            match["player_slot_url"] = post_url or slot.get("url", "")
-                            match["blogger_post_id"] = post_id
-                            match["blogger_post_url"] = post_url
+                            if not post_url and slot:
+                                post_title = slot.get("title") or (match["match_name"] + " Live Stream")
+                                post_id = slot["post_id"]
+                                print(f"[*] Updating player slot {slot['id']} ({post_id})...")
+                                post_url = update_blogger_post(config, token, post_id, post_title, player_html)
+                                print(f"[+] Player slot updated successfully! URL: {post_url}")
+                                match["player_slot_id"] = slot["id"]
+                                match["player_slot_post_id"] = post_id
+                                match["player_slot_url"] = post_url or slot.get("url", "")
+                                match["blogger_post_id"] = post_id
+                                match["blogger_post_url"] = post_url
                         match.pop("iframe_embed_code", None)
                     except Exception as e:
                         print(f"[-] Blogger upload failed: {e}")
@@ -1162,22 +1267,73 @@ def check_and_run():
         elif now > run_end:
             print(f"[*] Match active window ended: {match['match_name']}")
             portal_updates_enabled = has_new_oauth and not is_manual_portal_match(match)
-            if portal_updates_enabled and not match.get("new_blog_ended_set"):
+            metadata_changed = False
+            try:
+                metadata_changed = refresh_match_metadata(
+                    match,
+                    scheduler_config,
+                    now,
+                    active=True,
+                    force=True,
+                    score_only=False,
+                )
+                if metadata_changed:
+                    print(f"[*] Final metadata checked/updated for: {match['match_name']}")
+            except Exception as e:
+                print(f"[-] Final metadata refresh failed: {e}")
+
+            if portal_updates_enabled and (metadata_changed or not match.get("new_blog_ended_set")):
                 try:
                     new_token = get_access_token(new_config)
                     update_portal_match_page(automation_config, new_config, new_token, match, "ended")
                     match["new_blog_ended_set"] = True
+                    match["new_blog_iframe_set"] = False
+                    match["new_blog_prepare_set"] = False
                 except Exception as e:
                     print(f"[-] Portal ended-state update failed: {e}")
-            match["status"] = "completed"
-            # Clean up stale player HTML file for this match
-            try:
-                player_file = os.path.join(paths["players_dir"], f"player_{slugify_match_name(match['match_name'])}.html")
-                if os.path.exists(player_file):
-                    os.remove(player_file)
-                    print(f"[*] Cleaned up stale player file: {player_file}")
-            except Exception as e:
-                print(f"[!] Warning: could not remove player file: {e}")
+
+            post_id = str(match.get("new_blogger_post_id") or "").strip()
+            if portal_updates_enabled and post_id and (metadata_changed or result_is_final(match)):
+                try:
+                    new_token = get_access_token(new_config)
+                    render_match = with_thumbnail_src(automation_config, new_config, match)
+                    post_html = render_preview_post(new_config, render_match)
+                    post_url = update_blogger_post(
+                        new_config,
+                        new_token,
+                        post_id,
+                        preview_post_title(render_match, new_config),
+                        post_html,
+                        preserve_existing_thumbnail=True,
+                    )
+                    match["new_blogger_post_url"] = post_url
+                    record_content_hash(match, "preview_post", post_html)
+                    print(f"[+] Preview post refreshed after match end: {post_url}")
+                except Exception as e:
+                    print(f"[-] Preview post ended-state refresh failed: {e}")
+
+            if result_is_final(match) or completion_grace_expired(match, scheduler_config, now):
+                if not result_is_final(match):
+                    checked_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    existing_result = match.get("result") if isinstance(match.get("result"), dict) else {}
+                    match["result"] = dict(existing_result, status="final_unverified", checked_at=checked_at, final_at=checked_at)
+                    print(f"[!] Final score not verified for {match['match_name']} before grace deadline.")
+                else:
+                    score = final_score_text(match)
+                    if score:
+                        print(f"[+] Final score verified for {match['match_name']}: {score}")
+                match["status"] = "completed"
+                # Clean up stale player HTML file for this match
+                try:
+                    player_file = os.path.join(paths["players_dir"], f"player_{slugify_match_name(match['match_name'])}.html")
+                    if os.path.exists(player_file):
+                        os.remove(player_file)
+                        print(f"[*] Cleaned up stale player file: {player_file}")
+                except Exception as e:
+                    print(f"[!] Warning: could not remove player file: {e}")
+            else:
+                match["status"] = "ended"
+                print(f"[*] Waiting for verified final score before archiving {match['match_name']}.")
             changed = True
 
     if changed:

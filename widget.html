@@ -619,6 +619,24 @@
       buildOtherMatches(allMatches, match.match_name);
     }
 
+    function fetchScheduleFrom(paths, index) {
+      const schedulePath = paths[index];
+      return fetch(schedulePath)
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          return response.json();
+        })
+        .catch(err => {
+          if (index + 1 < paths.length) {
+            console.warn(`Could not fetch ${schedulePath}. Trying fallback schedule path.`, err);
+            return fetchScheduleFrom(paths, index + 1);
+          }
+          throw err;
+        });
+    }
+
     // Main controller
     function init() {
       const matchQuery = getQueryParam('match');
@@ -638,14 +656,13 @@
         return;
       }
 
-      // Attempt to load schedule
-      fetch('match_schedule.json')
-        .then(response => response.json())
+      // Attempt to load active schedule.
+      fetchScheduleFrom(['data/match_schedule.json'], 0)
         .then(data => {
           processSchedule(data, matchQuery);
         })
         .catch(err => {
-          console.warn("Could not fetch match_schedule.json. Falling back to preview database.", err);
+          console.warn("Could not fetch active match schedule. Falling back to preview database.", err);
           processSchedule(fallbackSchedule, matchQuery);
         });
     }

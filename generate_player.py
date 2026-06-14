@@ -2740,6 +2740,15 @@ def probe_stream_url(url, stream_type, clear_keys=None):
         result["error"] = "non-http-url"
         result["validation_reason"] = "non-http-url"
         return result
+
+    # Blocklist check for known non-match/local stream patterns
+    url_lower = url.lower()
+    blocked_patterns = ["puertorico", "nbculocallive.akamaized.net"]
+    for pattern in blocked_patterns:
+        if pattern in url_lower:
+            result["error"] = "blocked-stream-pattern"
+            result["validation_reason"] = f"url-contains-blocked-pattern:{pattern}"
+            return result
     r = None
     try:
         started = time.monotonic()
