@@ -101,7 +101,7 @@ def get_access_token(config):
     response.raise_for_status()
     return response.json().get("access_token")
 
-def create_blogger_post(config, access_token, title, html_content):
+def create_blogger_post(config, access_token, title, html_content, published=None):
     blog_id = config.get("blog_id")
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/"
     headers = {
@@ -114,10 +114,13 @@ def create_blogger_post(config, access_token, title, html_content):
         "title": title,
         "content": html_content
     }
+    if published:
+        payload["published"] = published
     response = requests.post(url, headers=headers, json=payload, timeout=20)
     response.raise_for_status()
     res_data = response.json()
     return res_data.get("id"), res_data.get("url")
+
 
 def html_has_image(html_content):
     return bool(re.search(r"<img\b", html_content or "", flags=re.IGNORECASE))
@@ -1295,7 +1298,14 @@ def main():
                             changed = True
                             post_id, post_url = "", ""
                         else:
-                            post_id, post_url = create_blogger_post(config, access_token, post_title, post_html)
+                            post_id, post_url = create_blogger_post(
+                                config,
+                                access_token,
+                                post_title,
+                                post_html,
+                                published=publish_overrides.get(match["match_key"])
+                            )
+
                             post_written = True
                     if post_id and not args.dry_run:
                         match["new_blogger_post_id"] = post_id

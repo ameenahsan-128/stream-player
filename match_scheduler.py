@@ -46,6 +46,7 @@ from portal_renderer import (
 )
 from precreate_posts import create_stream_blogger_page, find_existing_blogger_page, is_manual_portal_match, update_blogger_page
 from thumbnail_manager import with_thumbnail_src
+from generate_player import render_player_html
 
 CONFIG_FILE = "blogger_config.json"
 SCHEDULER_STATE_FILE = "scheduler_state.json"
@@ -168,7 +169,7 @@ def preserve_existing_post_thumbnail(config, access_token, post_id, html_content
     return f"{preserved}\n{html_content}"
 
 
-def update_blogger_post(config, access_token, post_id, title, html_content, preserve_existing_thumbnail=False):
+def update_blogger_post(config, access_token, post_id, title, html_content, published=None, preserve_existing_thumbnail=False):
     blog_id = config.get("blog_id")
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -187,6 +188,8 @@ def update_blogger_post(config, access_token, post_id, title, html_content, pres
         "title": title,
         "content": html_content
     }
+    if published:
+        payload["published"] = published
     try:
         response = requests.patch(url, headers=headers, json=payload, timeout=20)
         response.raise_for_status()
@@ -1293,24 +1296,56 @@ def check_and_run():
                     print(f"[-] Portal ended-state update failed: {e}")
 
             post_id = str(match.get("new_blogger_post_id") or "").strip()
-            if portal_updates_enabled and post_id and (metadata_changed or result_is_final(match)):
+            if portal_updates_enabled and post_id and (metadata_changed or result_is_final(match) or not match.get("new_blog_post_put_down")):
                 try:
                     new_token = get_access_token(new_config)
                     render_match = with_thumbnail_src(automation_config, new_config, match)
                     post_html = render_preview_post(new_config, render_match)
+                    try:
+                        kickoff = parse_match_time(match["match_time"])
+                        published_dt = kickoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                    except Exception:
+                        published_dt = None
                     post_url = update_blogger_post(
                         new_config,
                         new_token,
                         post_id,
                         preview_post_title(render_match, new_config),
                         post_html,
+                        published=published_dt,
                         preserve_existing_thumbnail=True,
                     )
                     match["new_blogger_post_url"] = post_url
+                    match["new_blog_post_put_down"] = True
                     record_content_hash(match, "preview_post", post_html)
-                    print(f"[+] Preview post refreshed after match end: {post_url}")
+                    print(f"[+] Preview post refreshed after match end (put down): {post_url}")
                 except Exception as e:
                     print(f"[-] Preview post ended-state refresh failed: {e}")
+
+            # Put down the player dedicated post if one exists
+            dedicated_post_id = dedicated_player_post_id(match, player_slots)
+            if has_player_oauth and dedicated_post_id and not match.get("player_post_put_down"):
+                try:
+                    token = get_access_token(config)
+                    post_title = match["match_name"] + " Live Stream"
+                    empty_html = render_player_html("const STREAM_LINKS = [];")
+                    try:
+                        kickoff = parse_match_time(match["match_time"])
+                        published_dt = kickoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                    except Exception:
+                        published_dt = None
+                    update_blogger_post(
+                        config,
+                        token,
+                        dedicated_post_id,
+                        post_title,
+                        empty_html,
+                        published=published_dt,
+                    )
+                    match["player_post_put_down"] = True
+                    print(f"[+] Player dedicated post cleared and put down successfully: {dedicated_post_id}")
+                except Exception as e:
+                    print(f"[-] Player dedicated post put down failed: {e}")
 
             if result_is_final(match) or completion_grace_expired(match, scheduler_config, now):
                 if not result_is_final(match):
@@ -1335,6 +1370,51 @@ def check_and_run():
                 match["status"] = "ended"
                 print(f"[*] Waiting for verified final score before archiving {match['match_name']}.")
             changed = True
+
+    # Clean up player slots that are no longer occupied by any active match
+    occupied_slot_ids = set()
+    for m in schedule:
+        if m.get("status") not in ("completed", "ended"):
+            slot_id = m.get("player_slot_id")
+            if slot_id:
+                occupied_slot_ids.add(slot_id)
+
+    state = load_scheduler_state(automation_config)
+    cleared_slots = state.get("cleared_player_slots") or []
+    if not isinstance(cleared_slots, list):
+        cleared_slots = []
+
+    state_changed = False
+    for slot in player_slots:
+        slot_id = slot.get("id")
+        post_id = slot.get("post_id")
+        slot_title = slot.get("title") or "World Cup Live Player"
+        if not slot_id or not post_id:
+            continue
+
+        if slot_id in occupied_slot_ids:
+            if slot_id in cleared_slots:
+                cleared_slots.remove(slot_id)
+                state_changed = True
+        else:
+            if slot_id not in cleared_slots:
+                print(f"[*] Clearing player slot {slot_id} ({post_id}) on Blogger...")
+                try:
+                    empty_html = render_player_html("const STREAM_LINKS = [];")
+                    if has_player_oauth:
+                        token = get_access_token(config)
+                        update_blogger_post(config, token, post_id, slot_title, empty_html)
+                        print(f"[+] Player slot {slot_id} cleared successfully.")
+                        cleared_slots.append(slot_id)
+                        state_changed = True
+                    else:
+                        print(f"[!] Cannot clear slot {slot_id}: Blogger OAuth not configured.")
+                except Exception as e:
+                    print(f"[-] Failed to clear player slot {slot_id}: {e}")
+
+    if state_changed:
+        state["cleared_player_slots"] = cleared_slots
+        save_scheduler_state(state, automation_config)
 
     if changed:
         schedule, archived_after = archive_completed_matches(schedule, automation_config, scheduler_config, now)
