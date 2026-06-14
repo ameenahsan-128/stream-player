@@ -454,7 +454,7 @@ input[type=range].vol-slider {
 .badge.sd    { background: rgba(241,196,15,0.15);   color: #f1c40f; border: 1px solid rgba(241,196,15,0.3); }
 .badge.eng   { background: rgba(52,152,219,0.15);   color: #3498db; border: 1px solid rgba(52,152,219,0.3); }
 .badge.ara   { background: rgba(155,89,182,0.15);   color: #9b59b6; border: 1px solid rgba(155,89,182,0.3); }
-.badge.ios   { background: rgba(255,255,255,0.08);  color: #ccc;    border: 1px solid rgba(255,255,255,0.15); }
+.badge.ios   { background: rgba(255, 159, 64, 0.22); color: #ff9f40; border: 1px solid rgba(255, 159, 64, 0.45); font-weight: 700; box-shadow: 0 0 4px rgba(255, 159, 64, 0.2); }
 .badge.auto  { background: rgba(230,57,70,0.12);    color: var(--red); border: 1px solid rgba(230,57,70,0.25); }
 .badge.dash  { background: rgba(52,152,219,0.12);   color: #3498db; border: 1px solid rgba(52,152,219,0.3); }
 .badge.hls   { background: rgba(46,204,113,0.12);   color: #2ecc71; border: 1px solid rgba(46,204,113,0.3); }
@@ -831,7 +831,10 @@ STREAM_LINKS.forEach((lnk, i) => {
 
 function sortAndRebuildLinks() {
   const activeId = STREAM_LINKS[activeIndex] ? STREAM_LINKS[activeIndex].id : null;
-  const typePriority = { dash: 0, hls: 1, native: 2, iframe: 3 };
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) || (navigator.userAgent.includes('Macintosh') && 'ontouchend' in document);
+  const typePriority = isIOS
+    ? { hls: 0, native: 1, iframe: 2, dash: 3 }
+    : { dash: 0, hls: 1, native: 2, iframe: 3 };
   const priorityOf = (lnk) => typePriority[lnk.type] ?? 4;
   
   STREAM_LINKS.sort((a, b) => {
@@ -1712,7 +1715,12 @@ const BADGE_LABELS = {
 
 function buildLinks() {
   linksList.innerHTML = '';
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) || (navigator.userAgent.includes('Macintosh') && 'ontouchend' in document);
+  let displayIdx = 1;
   STREAM_LINKS.forEach((lnk, i) => {
+    if (isIOS && lnk.type !== 'hls') {
+      return; // Skip non-HLS links on iOS/iPhone
+    }
     const row = document.createElement('div');
     row.className = 'stream-link-item' + (!lnk.url ? ' disabled' : '');
     row.dataset.index = i;
@@ -1726,7 +1734,7 @@ function buildLinks() {
     const badgeHTML = displayBadges.map(b => `<span class="badge ${b}">${BADGE_LABELS[b] || b.toUpperCase()}</span>`).join('');
 
     row.innerHTML = `
-      <span class="link-num">${i + 1}</span>
+      <span class="link-num">${displayIdx++}</span>
       <span class="link-info">
         <span class="link-label">${lnk.label}</span>
         <span class="link-meta">${lnk.meta}</span>
@@ -1744,8 +1752,8 @@ function buildLinks() {
 
 function setActive(idx) {
   activeIndex = idx;
-  document.querySelectorAll('.stream-link-item').forEach((el, i) => {
-    el.classList.toggle('active', i === idx);
+  document.querySelectorAll('.stream-link-item').forEach((el) => {
+    el.classList.toggle('active', parseInt(el.dataset.index, 10) === idx);
   });
 }
 
@@ -1779,7 +1787,7 @@ function switchStream(idx, options = {}) {
 /* ═══════════════════════════════════════════════════════════════
    BOOTSTRAP
 ═══════════════════════════════════════════════════════════════ */
-buildLinks();
+sortAndRebuildLinks();
 
 const params     = new URL(location.href).searchParams;
 const paramUrl   = params.get('url');
@@ -2904,6 +2912,10 @@ def main():
         help="One or more root page URLs to crawl (separated by space)."
     )
     parser.add_argument(
+        "-t", "--title",
+        help="Canonical match title to use for stream link labeling (e.g. 'Germany Vs Curacao')."
+    )
+    parser.add_argument(
         "-f", "--file",
         help="Path to a text file containing root URLs (one per line)."
     )
@@ -3255,7 +3267,7 @@ def main():
                     badges.append("eng")
                 if "ara" in label_lower or "arabic" in label_lower:
                     badges.append("ara")
-                if "ios" in label_lower or "ios" in playback_url.lower() or "iphone" in label_lower:
+                if s_type == "hls" or "ios" in label_lower or "ios" in playback_url.lower() or "iphone" in label_lower:
                     badges.append("ios")
                 if probe.get("backup"):
                     badges.append("backup")
@@ -3334,7 +3346,7 @@ def main():
             meta_parts = item["meta_parts"]
             
             # Clean labels
-            match_title = get_clean_match_title(label_raw, item.get("root_origin_url") or item["root_target_url"])
+            match_title = args.title or get_clean_match_title(label_raw, item.get("root_origin_url") or item["root_target_url"])
             if match_title:
                 clean_label = f"Link {idx} — {match_title}"
             else:

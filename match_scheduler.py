@@ -364,7 +364,12 @@ def write_direct_links(match_name, post_url, player_html, config=None):
 
             # Construct button elements
             title_text = f"{match_name} — Link {idx + 1}"
-            subtitle_text = f"{quality} · {fmt} · {lang}{latency_tag}"
+            
+            iphone_suffix = ""
+            if fmt == "HLS" or "ios" in badges:
+                iphone_suffix = " · 🍎 Works on iPhone"
+                
+            subtitle_text = f"{quality} · {fmt} · {lang}{latency_tag}{iphone_suffix}"
 
             # Plain text representation
             btn_label = f"{title_text} | {subtitle_text}"
@@ -1116,7 +1121,7 @@ def check_and_run():
                     src_arg = ["-u", sources[0]]
                     print(f"[*] Scraping {sources[0]}...")
                 try:
-                    cmd = ["python3", "generate_player.py"] + src_arg + ["-o", temp_output]
+                    cmd = ["python3", "generate_player.py"] + src_arg + ["-o", temp_output, "-t", match["match_name"]]
                     res = subprocess.run(cmd, capture_output=True, text=True, check=True)
                     print(f"[+] Scraping successful. Generated {temp_output}")
                     match["scrape_fail_count"] = 0  # Reset failure counter on success

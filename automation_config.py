@@ -170,13 +170,10 @@ DEFAULT_FIXTURE_API_CONFIG = {
 
 DEFAULT_SHARED_SOCIAL_CONFIG = {
     "whatsapp_groups": [
-        "https://chat.whatsapp.com/E9UG7hmlObr61yTP1CjvAk",
-        "https://chat.whatsapp.com/KdNRt4WCQClLMmudKqe8Eg",
-        "https://chat.whatsapp.com/BfN4WNiLpjUJFtJbUys0nk",
-        "https://chat.whatsapp.com/Gm93HsMZDog9ExQ3KT9ED1",
-        "https://chat.whatsapp.com/CxQ3yYdEqGu0dC5mpaFKZY",
-        "https://chat.whatsapp.com/KmtHD4EPBe424XzohKqxSn",
-        "https://chat.whatsapp.com/C54sNsV9o3X8MMlYJLzCRC",
+        "https://chat.whatsapp.com/Kn4jkOys2oaJtuYbJv3Jlo",
+        "https://chat.whatsapp.com/Dmf2muWHbeH8OWChLJwlTE",
+        "https://chat.whatsapp.com/BY611PwCNMB99BWpgy0uCW",
+        "https://whatsapp.com/channel/0029Vb7wU691nozD3ci8Bn2F",
     ],
     "telegram_channels": [
         "https://t.me/+43_hofAviBs4YWJl",
