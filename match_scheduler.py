@@ -1308,7 +1308,7 @@ def check_and_run():
                     post_html = render_preview_post(new_config, render_match)
                     try:
                         kickoff = parse_match_time(match["match_time"])
-                        published_dt = kickoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                        published_dt = (kickoff - timedelta(days=30)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
                     except Exception:
                         published_dt = None
                     post_url = update_blogger_post(
@@ -1336,7 +1336,7 @@ def check_and_run():
                     empty_html = render_player_html("const STREAM_LINKS = [];")
                     try:
                         kickoff = parse_match_time(match["match_time"])
-                        published_dt = kickoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                        published_dt = (kickoff - timedelta(days=30)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
                     except Exception:
                         published_dt = None
                     update_blogger_post(
