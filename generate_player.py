@@ -5,6 +5,7 @@ import sys
 import json
 import argparse
 import time
+import asyncio
 import base64
 import requests
 import xml.etree.ElementTree as ET
@@ -15,6 +16,152 @@ from html import escape as html_escape
 
 from automation_config import get_player_blog_config, load_automation_config
 from pipeline_storage import ensure_runtime_dirs, load_schedule, storage_config
+
+# ----------------------------------------------------------------------
+# Domain Health Tracking
+# ----------------------------------------------------------------------
+DOMAIN_HEALTH_FILE = os.path.join("data", "domain_health.json")
+
+def load_domain_health():
+    """Load domain health stats from disk."""
+    if os.path.exists(DOMAIN_HEALTH_FILE):
+        try:
+            with open(DOMAIN_HEALTH_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_domain_health(health):
+    """Persist domain health stats to disk."""
+    try:
+        os.makedirs(os.path.dirname(DOMAIN_HEALTH_FILE), exist_ok=True)
+        with open(DOMAIN_HEALTH_FILE, "w", encoding="utf-8") as f:
+            json.dump(health, f, indent=2)
+    except Exception as e:
+        print(f"[-] Warning: Failed to save domain health: {e}", file=sys.stderr)
+
+def record_domain_result(health, url, success):
+    """Record a success or failure for a domain."""
+    domain = urlparse(url).netloc
+    if not domain:
+        return
+    entry = health.setdefault(domain, {"fail_count": 0, "success_count": 0})
+    if success:
+        entry["success_count"] = entry.get("success_count", 0) + 1
+    else:
+        entry["fail_count"] = entry.get("fail_count", 0) + 1
+
+def sort_urls_by_domain_health(urls, health):
+    """Sort URLs so healthy domains come first, failing domains last."""
+    def health_score(url):
+        domain = urlparse(url).netloc
+        entry = health.get(domain, {})
+        return entry.get("fail_count", 0) - entry.get("success_count", 0)
+    return sorted(urls, key=health_score)
+
+# ----------------------------------------------------------------------
+# Crawl4AI Browser-Based Fetcher
+# ----------------------------------------------------------------------
+_CRAWL4AI_AVAILABLE = None
+
+def is_crawl4ai_available():
+    """Check if Crawl4AI is available (cached)."""
+    global _CRAWL4AI_AVAILABLE
+    if _CRAWL4AI_AVAILABLE is None:
+        try:
+            from crawl4ai import AsyncWebCrawler
+            _CRAWL4AI_AVAILABLE = True
+        except ImportError:
+            _CRAWL4AI_AVAILABLE = False
+            print("[!] Crawl4AI not available. Using requests-only mode.", file=sys.stderr)
+    return _CRAWL4AI_AVAILABLE
+
+async def fetch_page_with_browser(url, timeout_ms=25000):
+    """Fetch a page using Crawl4AI (Playwright) with full JS execution.
+    Returns (html_content, success) tuple.
+    """
+    from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
+
+    browser_config = BrowserConfig(
+        headless=True,
+        text_mode=False,
+        extra_args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
+    )
+    run_config = CrawlerRunConfig(
+        wait_until="networkidle",
+        page_timeout=timeout_ms,
+        js_code=[
+            "window.scrollTo(0, document.body.scrollHeight);",
+            "await new Promise(r => setTimeout(r, 1500));",
+            "window.scrollTo(0, 0);",
+        ],
+    )
+    try:
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result = await crawler.arun(url=url, config=run_config)
+            if result.success and result.html:
+                return result.html, True
+            return None, False
+    except Exception as e:
+        print(f"[-] Crawl4AI fetch failed for {url}: {e}", file=sys.stderr)
+        return None, False
+
+def fetch_page_with_browser_sync(url, timeout_ms=25000):
+    """Synchronous wrapper for the async browser fetch."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                html, success = pool.submit(
+                    lambda: asyncio.run(fetch_page_with_browser(url, timeout_ms))
+                ).result(timeout=timeout_ms // 1000 + 10)
+            return html, success
+        else:
+            return loop.run_until_complete(fetch_page_with_browser(url, timeout_ms))
+    except Exception:
+        return asyncio.run(fetch_page_with_browser(url, timeout_ms))
+
+def fetch_page_html(url, headers=None, use_browser=False, timeout=15):
+    """Unified page fetcher: tries browser (Crawl4AI) first if enabled, falls back to requests.
+    Returns (html_content, success, method_used) tuple.
+    """
+    if headers is None:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+
+    # Try browser-based fetch for JS-heavy pages
+    if use_browser and is_crawl4ai_available():
+        html, success = fetch_page_with_browser_sync(url, timeout_ms=timeout * 1000)
+        if success and html:
+            print(f"[+] Browser fetch succeeded for {url} ({len(html)} chars)")
+            return html, True, "crawl4ai"
+        print(f"[-] Browser fetch failed for {url}, falling back to requests")
+
+    # Standard requests fallback
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        return response.text, True, "requests"
+    except Exception as e:
+        print(f"[-] requests fetch failed for {url}: {e}", file=sys.stderr)
+        return None, False, "requests"
+
+# List of domains known to require JS rendering
+JS_HEAVY_DOMAINS = {
+    "football.scoopnonstop.com",
+    "sportstrack.yallatvlive.com",
+    "sportstrack.me",
+    "90live.yallatvlive.com",
+    "vivo.epicsportss.com",
+    "fifawcbycxf.pages.dev",
+    "cxfoot.pages.dev",
+}
+
+def should_use_browser(url):
+    """Determine if a URL should be fetched with the browser (Playwright)."""
+    domain = urlparse(url).netloc.lower()
+    return domain in JS_HEAVY_DOMAINS
 
 # ----------------------------------------------------------------------
 # HTML Link Parser
@@ -2324,11 +2471,13 @@ def analyze_page(url, html, visited):
                     
     return stream_info
 
-def crawl_url_recursive(url, depth=0, max_depth=2, visited=None, headers=None):
+def crawl_url_recursive(url, depth=0, max_depth=2, visited=None, headers=None, domain_health=None):
     if visited is None:
         visited = set()
     if headers is None:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    if domain_health is None:
+        domain_health = {}
         
     if url in visited:
         return None
@@ -2337,21 +2486,26 @@ def crawl_url_recursive(url, depth=0, max_depth=2, visited=None, headers=None):
     if depth > max_depth:
         return None
         
-    print(f"{'  ' * depth}[*] Crawling page: {url}")
-    try:
-        r = requests.get(url, headers=headers, timeout=12)
-        r.raise_for_status()
-        html = r.text
-    except Exception as e:
-        print(f"{'  ' * depth}[-]" + f" Failed to fetch {url}: {e}", file=sys.stderr)
+    use_browser = should_use_browser(url) and depth == 0  # Only use browser at top level
+    method_label = "browser" if use_browser else "requests"
+    print(f"{'  ' * depth}[*] Crawling page ({method_label}): {url}")
+
+    html, success, method = fetch_page_html(url, headers=headers, use_browser=use_browser, timeout=12)
+    if not success or not html:
+        record_domain_result(domain_health, url, False)
+        print(f"{'  ' * depth}[-] Failed to fetch {url} via {method}", file=sys.stderr)
         return {
             "url": url,
-            "error": str(e),
+            "error": f"Fetch failed via {method}",
+            "fetch_method": method,
             "nested_results": []
         }
+
+    record_domain_result(domain_health, url, True)
         
     info = analyze_page(url, html, visited)
     info["nested_results"] = []
+    info["fetch_method"] = method
     
     has_redirect = any(item["type"] == "js_map_redirect" for item in info["nested_links"])
     
@@ -2365,7 +2519,7 @@ def crawl_url_recursive(url, depth=0, max_depth=2, visited=None, headers=None):
             should_follow = True
             
         if should_follow:
-            nested_res = crawl_url_recursive(nested["url"], depth+1, max_depth, visited, headers)
+            nested_res = crawl_url_recursive(nested["url"], depth+1, max_depth, visited, headers, domain_health)
             if nested_res:
                 info["nested_results"].append(nested_res)
                 
@@ -2876,9 +3030,31 @@ def probe_stream_url(url, stream_type, clear_keys=None):
 def is_stream_url_working(url, stream_type):
     return probe_stream_url(url, stream_type).get("working", False)
 
-def process_root_url(root_url, max_depth=2):
+def process_root_url(root_url, max_depth=2, domain_health=None):
+    if domain_health is None:
+        domain_health = {}
+
     print(f"\n[*] STEP 1: Scraping page for stream links: {root_url}")
-    matched_links = extract_root_links(root_url)
+
+    # Use browser for the root page if it's a JS-heavy domain
+    use_browser_for_root = should_use_browser(root_url)
+    if use_browser_for_root:
+        html, success, method = fetch_page_html(root_url, use_browser=True, timeout=15)
+        if success and html:
+            record_domain_result(domain_health, root_url, True)
+            # Parse the browser-rendered HTML for stream buttons
+            parser = EpicLinkParser(root_url)
+            parser.feed(html)
+            matched_links = []
+            for item in parser.results:
+                if item["tag"] in ("a", "button") and is_likely_stream_button(item["text"], item["url"], root_url):
+                    matched_links.append({"label": item["text"], "url": item["url"]})
+        else:
+            record_domain_result(domain_health, root_url, False)
+            matched_links = extract_root_links(root_url)
+    else:
+        matched_links = extract_root_links(root_url)
+
     print(f"[+] Found {len(matched_links)} stream button(s)/link(s).")
     
     results = []
@@ -2887,7 +3063,7 @@ def process_root_url(root_url, max_depth=2):
         print(f"[*] Target URL: {item['url']}")
         
         visited = set()
-        tree = crawl_url_recursive(item["url"], depth=0, max_depth=max_depth, visited=visited)
+        tree = crawl_url_recursive(item["url"], depth=0, max_depth=max_depth, visited=visited, domain_health=domain_health)
         details = extract_final_stream_details(tree)
         
         results.append({
@@ -3166,6 +3342,9 @@ def main():
         
         expanded_root_urls = []
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+
+        # Load domain health for prioritization
+        domain_health = load_domain_health()
         
         for url in root_urls:
             try:
@@ -3178,9 +3357,14 @@ def main():
                 
                 if is_portal:
                     print(f"[*] Checking if root URL is a match portal: {url}")
-                    response = requests.get(url, headers=headers, timeout=15)
-                    response.raise_for_status()
-                    match_pages = get_match_pages_from_root(url, response.text)
+                    # Use browser-based fetch for JS-heavy portals
+                    html, success, method = fetch_page_html(url, headers=headers, use_browser=should_use_browser(url), timeout=15)
+                    if success and html:
+                        record_domain_result(domain_health, url, True)
+                        match_pages = get_match_pages_from_root(url, html)
+                    else:
+                        record_domain_result(domain_health, url, False)
+                        match_pages = []
                 else:
                     match_pages = []
                 
@@ -3205,16 +3389,22 @@ def main():
                         expanded_root_urls.append(url)
             except Exception as e:
                 print(f"[-] Warning: Failed to pre-scan root URL {url}: {e}")
+                record_domain_result(domain_health, url, False)
                 if url not in expanded_root_urls:
                     expanded_root_urls.append(url)
-                    
-        print(f"[*] Total target URL(s) to process after time-filtering: {len(expanded_root_urls)}")
+
+        # Sort URLs by domain health: healthy domains first, failing domains last
+        expanded_root_urls = sort_urls_by_domain_health(expanded_root_urls, domain_health)
+        print(f"[*] Total target URL(s) to process after time-filtering and health-sorting: {len(expanded_root_urls)}")
         
         # Process and crawl all streams
         all_results = []
         for root_url in expanded_root_urls:
-            results = process_root_url(root_url, max_depth=args.depth)
+            results = process_root_url(root_url, max_depth=args.depth, domain_health=domain_health)
             all_results.extend(results)
+
+        # Persist updated domain health
+        save_domain_health(domain_health)
         
         # Format results to JavaScript objects for STREAM_LINKS with sorting by priority (DASH first, then HLS, etc.)
         resolved_items = []
