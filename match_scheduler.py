@@ -797,11 +797,13 @@ def auto_discover_matches(force=False):
     for portal in portals:
         print(f"[*] Scanning portal: {portal}")
         try:
-            r = requests.get(portal, headers=headers, timeout=12)
-            if r.status_code != 200:
+            # Use browser-based fetch for JS-heavy portals (same as generate_player.py)
+            from generate_player import fetch_page_html, should_use_browser
+            html, success, method = fetch_page_html(portal, headers=headers, use_browser=should_use_browser(portal), timeout=12)
+            if not success or not html:
                 continue
 
-            for candidate in extract_discovery_candidates(portal, r.text, trusted_domains):
+            for candidate in extract_discovery_candidates(portal, html, trusted_domains):
                 resolved_url = candidate["url"]
                 candidate_text = candidate["text"]
                 resolved_url_key = canonical_url(resolved_url)

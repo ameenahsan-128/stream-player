@@ -2,6 +2,9 @@
 CRON_TZ=UTC
 PYTHONDONTWRITEBYTECODE=1
 
+# Run immediately on boot/laptop wake to catch up on any missed matches
+@reboot sleep 30 && cd /home/expertz/stream && /usr/bin/python3 match_scheduler.py --once >> data/scheduler.log 2>&1
+
 * * * * * cd /home/expertz/stream && /usr/bin/python3 match_scheduler.py --once >> data/scheduler.log 2>&1
 45 18 * * * cd /home/expertz/stream && /usr/bin/python3 precreate_posts.py --refresh-existing --within-hours 72 >> data/precreate.log 2>&1
 0 */6 * * * cd /home/expertz/stream && /usr/bin/python3 precreate_posts.py --refresh-existing --within-hours 72 >> data/precreate.log 2>&1
