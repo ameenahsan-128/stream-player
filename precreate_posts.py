@@ -51,8 +51,8 @@ DEFAULT_AD_TOP = """
 DEFAULT_AD_POPUP = """
 <!--Popup Ad Overlay-->
 <div id="popup-ad-overlay" style="align-items: center; background: rgba(0, 0, 0, 0.6); display: none; height: 100%; justify-content: center; left: 0px; position: fixed; top: 0px; width: 100%; z-index: 99999;">
-  <div style="background: rgb(255, 255, 255); border-radius: 8px; padding: 10px; position: relative;">
-    <button onclick="document.getElementById('popup-ad-overlay').style.display='none'" style="background: rgb(51, 51, 51); border: none; color: white; cursor: pointer; font-size: 16px; height: 26px; line-height: 1; position: absolute; right: -12px; top: -12px; width: 26px; border-radius: 50%;">&times;</button>
+  <div id="popup-ad-inner" style="background: rgb(255, 255, 255); border-radius: 8px; padding: 10px; position: relative; min-width: 300px; min-height: 250px;">
+    <button onclick="document.getElementById('popup-ad-overlay').style.display='none'" style="background: rgb(51, 51, 51); border: none; color: white; cursor: pointer; font-size: 16px; height: 26px; line-height: 1; position: absolute; right: -12px; top: -12px; width: 26px; border-radius: 50%; z-index: 100000;">&times;</button>
     <script type="text/javascript">
       atOptions = {
         'key' : '26752c18ca8361bba098d31342583042',
@@ -68,8 +68,25 @@ DEFAULT_AD_POPUP = """
 <script type="text/javascript">
   window.addEventListener('load', function() {
     setTimeout(function() {
-      const overlay = document.getElementById('popup-ad-overlay');
-      if (overlay) overlay.style.display = 'flex';
+      var overlay = document.getElementById('popup-ad-overlay');
+      var inner = document.getElementById('popup-ad-inner');
+      if (!overlay || !inner) return;
+      var adFrame = inner.querySelector('iframe');
+      if (adFrame) {
+        overlay.style.display = 'flex';
+      } else {
+        var retries = 0;
+        var checkAd = setInterval(function() {
+          retries++;
+          var frame = inner.querySelector('iframe');
+          if (frame) {
+            clearInterval(checkAd);
+            overlay.style.display = 'flex';
+          } else if (retries >= 10) {
+            clearInterval(checkAd);
+          }
+        }, 500);
+      }
     }, 3000); // Trigger popup after 3 seconds
   });
 </script>

@@ -49,8 +49,8 @@ def async_external_scripts(html_content):
 def render_popup_ad(ad_content, delay_ms=3000):
     return f"""
 <div id="popup-ad-overlay" style="align-items: center; background: rgba(0, 0, 0, 0.6); display: none; height: 100%; justify-content: center; left: 0; position: fixed; top: 0; width: 100%; z-index: 99999;">
-  <div style="background: #ffffff; border-radius: 8px; padding: 10px; position: relative;">
-    <button onclick="document.getElementById('popup-ad-overlay').style.display='none'" style="background: #333333; border: none; color: white; cursor: pointer; font-size: 16px; height: 26px; line-height: 1; position: absolute; right: -12px; top: -12px; width: 26px; border-radius: 50%;">&times;</button>
+  <div id="popup-ad-inner" style="background: #ffffff; border-radius: 8px; padding: 10px; position: relative; min-width: 300px; min-height: 250px;">
+    <button onclick="document.getElementById('popup-ad-overlay').style.display='none'" style="background: #333333; border: none; color: white; cursor: pointer; font-size: 16px; height: 26px; line-height: 1; position: absolute; right: -12px; top: -12px; width: 26px; border-radius: 50%; z-index: 100000;">&times;</button>
     {async_external_scripts(ad_content)}
   </div>
 </div>
@@ -58,7 +58,27 @@ def render_popup_ad(ad_content, delay_ms=3000):
   window.addEventListener('load', function() {{
     setTimeout(function() {{
       var overlay = document.getElementById('popup-ad-overlay');
-      if (overlay) overlay.style.display = 'flex';
+      var inner = document.getElementById('popup-ad-inner');
+      if (!overlay || !inner) return;
+      // Only show popup if the ad network actually injected an iframe
+      var adFrame = inner.querySelector('iframe');
+      if (adFrame) {{
+        overlay.style.display = 'flex';
+      }} else {{
+        // Retry a few times in case the ad loads slowly
+        var retries = 0;
+        var checkAd = setInterval(function() {{
+          retries++;
+          var frame = inner.querySelector('iframe');
+          if (frame) {{
+            clearInterval(checkAd);
+            overlay.style.display = 'flex';
+          }} else if (retries >= 10) {{
+            clearInterval(checkAd);
+            // Ad never loaded — don't show empty popup
+          }}
+        }}, 500);
+      }}
     }}, {int(delay_ms)});
   }});
 </script>
