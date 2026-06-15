@@ -164,6 +164,95 @@ def should_use_browser(url):
     return domain in JS_HEAVY_DOMAINS
 
 # ----------------------------------------------------------------------
+# Junk Iframe Filtering — blocks ads, tracking, self-embeds, wrong-match pages
+# ----------------------------------------------------------------------
+JUNK_IFRAME_DOMAIN_PATTERNS = {
+    # Ad networks / tracking
+    "criteo.com", "doubleclick.net", "googlesyndication.com",
+    "googletagmanager.com", "googleadservices.com", "google-analytics.com",
+    "facebook.com", "facebook.net", "twitter.com", "instagram.com",
+    "amazon-adsystem.com", "adnxs.com", "outbrain.com", "taboola.com",
+    "adsafeprotected.com", "moatads.com", "highperformanceformat.com",
+    "effectivecpmnetwork.com", "profitableratecpm.com",
+    # Captcha / bot protection
+    "google.com/recaptcha", "hcaptcha.com", "cloudflare.com/cdn-cgi",
+    # Analytics
+    "hotjar.com", "clarity.ms", "chartbeat.com",
+    # Social widgets
+    "disqus.com", "addthis.com", "sharethis.com",
+    # Known tracker/redirect domains
+    "arizonaplay.club",
+}
+
+JUNK_IFRAME_PATH_PATTERNS = {
+    # Blogspot template/utility pages
+    "/p/base-button", "/p/base-link", "/p/btn-", "/p/button-",
+    # Generic non-stream paths
+    "/ads", "/ad-", "/pixel", "/beacon", "/tracking", "/analytics",
+    "/ns.html",  # GTM noscript
+    "/syncframe",  # Criteo sync
+    "/api2/aframe",  # reCAPTCHA
+}
+
+def is_junk_iframe(url, source_urls=None):
+    """Check if an iframe URL is junk (ads, tracking, self-embeds, wrong pages).
+    
+    Args:
+        url: The iframe URL to check
+        source_urls: Optional set of source portal URLs being scraped
+                     (to prevent embedding the source site itself)
+    Returns:
+        True if the URL should be rejected as a junk iframe
+    """
+    if not url or not url.startswith("http"):
+        return True
+    
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower()
+    path_lower = parsed.path.lower()
+    url_lower = url.lower()
+    
+    # Check domain blocklist
+    for pattern in JUNK_IFRAME_DOMAIN_PATTERNS:
+        if "/" in pattern:
+            # Pattern includes path (e.g. google.com/recaptcha)
+            if pattern in url_lower:
+                return True
+        else:
+            # Domain-only pattern
+            if domain == pattern or domain.endswith("." + pattern):
+                return True
+    
+    # Check path blocklist
+    for pattern in JUNK_IFRAME_PATH_PATTERNS:
+        if pattern in path_lower:
+            return True
+    
+    # Reject blogspot utility/template pages (not match-specific content)
+    if "blogspot.com/p/" in url_lower and not any(
+        kw in path_lower for kw in ["/p/live", "/p/stream", "/p/watch", "/p/player"]
+    ):
+        return True
+    
+    # Reject source portal URLs being embedded back as iframes
+    # (this is the "showing website inside player" bug)
+    if source_urls:
+        iframe_canon = domain + path_lower.rstrip("/")
+        for src_url in source_urls:
+            src_parsed = urlparse(src_url)
+            src_canon = src_parsed.netloc.lower() + src_parsed.path.lower().rstrip("/")
+            # Same domain + same/similar path = self-embed
+            if iframe_canon == src_canon:
+                return True
+            # Same domain, different match page = wrong match embed
+            if domain == src_parsed.netloc.lower() and path_lower.rstrip("/") != src_parsed.path.lower().rstrip("/"):
+                # Only block if it looks like a match page (has a date-like path)
+                if re.search(r'/\d{4}/\d{2}/', path_lower):
+                    return True
+    
+    return False
+
+# ----------------------------------------------------------------------
 # HTML Link Parser
 # ----------------------------------------------------------------------
 class EpicLinkParser(HTMLParser):
@@ -2428,8 +2517,15 @@ def analyze_page(url, html, visited):
     parser.feed(html)
     
     iframes = [item["url"] for item in parser.results if item["tag"] == "iframe"]
+    # Collect source URLs to prevent self-embedding
+    source_portal_urls = set()
+    if visited:
+        source_portal_urls = set(visited)
     for iframe_url in iframes:
         if iframe_url not in visited and iframe_url != url:
+            if is_junk_iframe(iframe_url, source_portal_urls):
+                print(f"[*] Filtered junk iframe: {iframe_url[:80]}")
+                continue
             stream_info["nested_links"].append({
                 "type": "iframe",
                 "url": iframe_url
@@ -2911,6 +3007,11 @@ def probe_stream_url(url, stream_type, clear_keys=None):
             result["error"] = "blocked-stream-pattern"
             result["validation_reason"] = f"url-contains-blocked-pattern:{pattern}"
             return result
+    # Reject junk iframes at probe level as an extra safety net
+    if stream_type == "iframe" and is_junk_iframe(url):
+        result["error"] = "junk-iframe"
+        result["validation_reason"] = "junk-iframe-blocked"
+        return result
     r = None
     try:
         started = time.monotonic()
