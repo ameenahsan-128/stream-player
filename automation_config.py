@@ -35,23 +35,11 @@ DEFAULT_DISCOVERY_PORTALS = [
     "https://cxfoot.pages.dev/",
     "https://football.scoopnonstop.com/",
     "https://sportscorner3697.blogspot.com/",
-    "https://loosports.xtva.shop/",
     "https://rexdexsports.in/",
     "https://www.rd9sports.pro/",
     "https://worldcup.epicsports.mobi/",
     "https://worldcup.epicsports.co.in/",
     "https://epicsports.mobi/",
-    # --- New portals added ---
-    "https://totalsportek.pro/",
-    "https://streamsgate.tv/",
-    "https://www.hesgoal.tv/",
-    "https://soccerstreams100.io/",
-    "https://redditsoccerstreams.tv/",
-    "https://weakstreams.com/",
-    "https://www.livesoccertv.com/",
-    "https://cricfree.io/",
-    "https://www.streameast.to/",
-    "https://sportsurge.net/",
 ]
 
 DEFAULT_TRUSTED_SOURCE_DOMAINS = [
@@ -80,7 +68,6 @@ DEFAULT_TRUSTED_SOURCE_DOMAINS = [
     "cxfoot.pages.dev",
     "football.scoopnonstop.com",
     "sportscorner3697.blogspot.com",
-    "loosports.xtva.shop",
     "ok.ru",
     "www.ok.ru",
     "rexdexsports.in",
@@ -88,25 +75,6 @@ DEFAULT_TRUSTED_SOURCE_DOMAINS = [
     "www.footem.co.in",
     "footem.co.in",
     "es.footem.in",
-    # --- New trusted domains ---
-    "totalsportek.pro",
-    "www.totalsportek.pro",
-    "streamsgate.tv",
-    "www.streamsgate.tv",
-    "hesgoal.tv",
-    "www.hesgoal.tv",
-    "soccerstreams100.io",
-    "redditsoccerstreams.tv",
-    "weakstreams.com",
-    "www.weakstreams.com",
-    "www.livesoccertv.com",
-    "livesoccertv.com",
-    "cricfree.io",
-    "www.cricfree.io",
-    "www.streameast.to",
-    "streameast.to",
-    "sportsurge.net",
-    "www.sportsurge.net",
 ]
 
 DEFAULT_METADATA_DOMAINS = [

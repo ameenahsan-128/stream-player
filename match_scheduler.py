@@ -311,7 +311,8 @@ def write_direct_links(match_name, post_url, player_html, config=None):
             lnk_type = lnk.get("type", "")
             height = lnk.get("height")
             latency_ms = lnk.get("latencyMs")
-            direct_url = f"{post_url}?link={idx + 1}"
+            import time
+            direct_url = f"{post_url}?link={idx + 1}&cb={int(time.time())}"
 
             # --- Quality: use height from probe data first, then badges/text ---
             if height and isinstance(height, (int, float)):
@@ -621,7 +622,57 @@ def match_source_score(match_name, candidate_text):
     candidate_tokens = normalize_match_tokens(candidate_text)
     if not match_tokens or not candidate_tokens:
         return 0
-    return len(match_tokens & candidate_tokens)
+    # Exact matches first
+    score = len(match_tokens & candidate_tokens)
+    # Fuzzy substring matching for abbreviated names
+    # e.g. "swden" matches "sweden", "nthlnds" matches "netherlands"
+    unmatched_match = match_tokens - candidate_tokens
+    unmatched_cand = candidate_tokens - match_tokens
+    matched_cand = set()
+    for mt in unmatched_match:
+        if len(mt) < 3:
+            continue
+        for ct in unmatched_cand:
+            if len(ct) < 3 or ct in matched_cand:
+                continue
+            # Check if one is a substring of the other (handles abbreviations)
+            if mt in ct or ct in mt:
+                score += 1
+                matched_cand.add(ct)
+                break
+            # Check consonant-skeleton match for vowel-stripped abbreviations
+            # e.g. "swdn" in "sweden" → consonants "swdn" vs "swdn"
+            mt_consonants = re.sub(r'[aeiou]', '', mt)
+            ct_consonants = re.sub(r'[aeiou]', '', ct)
+            if len(mt_consonants) >= 3 and len(ct_consonants) >= 3:
+                if mt_consonants == ct_consonants or mt_consonants in ct_consonants or ct_consonants in mt_consonants:
+                    score += 1
+                    matched_cand.add(ct)
+                    break
+                # Allow 1-2 char tolerance for longer consonant skeletons
+                # e.g. "nthrlnds" vs "nthlnds" (netherlands, missing 'r')
+                if len(mt_consonants) >= 5 and len(ct_consonants) >= 5:
+                    edits = _simple_edit_distance(mt_consonants, ct_consonants)
+                    if edits <= 2:
+                        score += 1
+                        matched_cand.add(ct)
+                        break
+    return score
+
+
+def _simple_edit_distance(a, b):
+    """Minimal edit distance for short strings (used for consonant skeleton comparison)."""
+    if abs(len(a) - len(b)) > 2:
+        return 99
+    if len(a) > len(b):
+        a, b = b, a
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i]
+        for j, cb in enumerate(b, 1):
+            curr.append(min(prev[j] + 1, curr[j-1] + 1, prev[j-1] + (ca != cb)))
+        prev = curr
+    return prev[-1]
 
 
 def candidate_text_for_url(url, anchor_text=""):
@@ -700,6 +751,12 @@ def within_source_discovery_window(match, scheduler_config, now_utc):
 def extract_discovery_candidates(portal, html, trusted_domains):
     candidates = []
     seen = set()
+    ignored_extensions = {
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff",
+        ".css", ".woff", ".woff2", ".ttf", ".eot", ".otf",
+        ".pdf", ".txt", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".7z", ".tar", ".gz",
+        ".js", ".json"
+    }
     link_pattern = re.compile(r'<a\b([^>]*)>(.*?)</a>', re.IGNORECASE | re.DOTALL)
     for match in link_pattern.finditer(html or ""):
         attrs = match.group(1)
@@ -719,13 +776,29 @@ def extract_discovery_candidates(portal, html, trusted_domains):
             continue
         if not parsed.path or parsed.path == "/":
             continue
+        path_lower = parsed.path.lower()
+        if any(path_lower.endswith(ext) for ext in ignored_extensions):
+            continue
         canon = canonical_url(resolved_url)
         if canon in seen:
             continue
         seen.add(canon)
+        # Capture surrounding context (500 chars before the link) for
+        # cases where the match name is in a heading/label near the link
+        # but NOT in the anchor text or URL itself.
+        context_text = ""
+        link_start = match.start()
+        context_window = (html or "")[max(0, link_start - 500):link_start]
+        context_text = re.sub(r"<[^>]+>", " ", context_window)
+        context_text = re.sub(r"\s+", " ", context_text).strip()
+        # Only keep the last ~120 chars of context (nearest heading/label)
+        context_text = context_text[-120:] if context_text else ""
+        combined_text = candidate_text_for_url(resolved_url, body)
+        if context_text:
+            combined_text = f"{combined_text} {context_text}"
         candidates.append({
             "url": resolved_url,
-            "text": candidate_text_for_url(resolved_url, body)
+            "text": combined_text
         })
 
     for raw_url in re.findall(r'https?://[^\s\x27"<>]+', html or ""):
@@ -734,6 +807,14 @@ def extract_discovery_candidates(portal, html, trusted_domains):
         if any(part in u_lower for part in STATIC_LINK_PARTS):
             continue
         if not trusted_domain(resolved_url, trusted_domains):
+            continue
+        parsed = urlparse(resolved_url)
+        if not parsed.scheme.startswith("http"):
+            continue
+        if not parsed.path or parsed.path == "/":
+            continue
+        path_lower = parsed.path.lower()
+        if any(path_lower.endswith(ext) for ext in ignored_extensions):
             continue
         canon = canonical_url(resolved_url)
         if canon in seen:

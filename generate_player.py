@@ -182,6 +182,11 @@ JUNK_IFRAME_DOMAIN_PATTERNS = {
     "disqus.com", "addthis.com", "sharethis.com",
     # Known tracker/redirect domains
     "arizonaplay.club",
+    # Image hosting / static assets domains (to prevent embedding photos)
+    "bp.blogspot.com", "googleusercontent.com", "ggpht.com",
+    "cloudinary.com", "imgur.com", "wp.com", "gravatar.com",
+    "postimg.cc", "postimages.org", "imgbb.com", "imagebam.com",
+    "photobucket.com", "flickr.com", "mediafire.com",
 }
 
 JUNK_IFRAME_PATH_PATTERNS = {
@@ -211,6 +216,34 @@ def is_junk_iframe(url, source_urls=None):
     domain = parsed.netloc.lower()
     path_lower = parsed.path.lower()
     url_lower = url.lower()
+    
+    # Reject ignored extensions (images, css, scripts, fonts, documents, etc.)
+    ignored_extensions = {
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff",
+        ".css", ".woff", ".woff2", ".ttf", ".eot", ".otf",
+        ".pdf", ".txt", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".7z", ".tar", ".gz",
+        ".js", ".json"
+    }
+    if any(path_lower.endswith(ext) for ext in ignored_extensions):
+        return True
+
+    # Reject root/index paths or empty paths (homepages)
+    path_clean = path_lower.strip("/")
+    if not path_clean or path_clean in ("index.html", "index.php", "home.html", "m=1"):
+        if not parsed.query:
+            return True
+
+    # Reject homepages / root paths / non-player pages of known portal domains
+    portal_domains = {
+        "epicsports.in", "epicsports.blog", "footem.co.in", "90live.in",
+        "yallatvlive.com", "notebookpot.com", "sportstrack.me", "soccervent.xyz",
+        "epicsportss.com", "scoopnonstop.com", "blogspot.com", "pages.dev"
+    }
+    is_portal_domain = any(domain == pd or domain.endswith("." + pd) for pd in portal_domains)
+    if is_portal_domain:
+        player_keywords = ["embed", "player", "stream", "watch", "live", "play", "ch"]
+        if not path_clean or path_clean in ("index.html", "index.php", "home.html", "m=1") or not any(kw in path_lower for kw in player_keywords):
+            return True
     
     # Check domain blocklist
     for pattern in JUNK_IFRAME_DOMAIN_PATTERNS:
@@ -856,12 +889,13 @@ input[type=range].vol-slider {
       <video id="video" playsinline autoplay muted></video>
 
       <!-- iframe container (used when URL is an embed) -->
-      <div class="iframe-wrap" id="iframe-wrap">
+      <div class="iframe-wrap" id="iframe-wrap" style="position: relative;">
         <iframe id="iframe-player"
           allowfullscreen
           allow="autoplay; encrypted-media; picture-in-picture"
           sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
           referrerpolicy="no-referrer"></iframe>
+        <div id="iframe-click-overlay" style="position: absolute; inset: 0; z-index: 8; cursor: pointer; background: transparent;"></div>
       </div>
 
       <!-- Loading overlay -->
@@ -1034,6 +1068,17 @@ input[type=range].vol-slider {
 </div><!-- /main -->
 
 <script>
+// Force fresh load from server if cb parameter is missing or older than 5 minutes
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const cb = params.get('cb');
+  const now = Math.floor(Date.now() / 1000);
+  if (!cb || (now - parseInt(cb, 10)) > 300) {
+    params.set('cb', now);
+    window.location.search = params.toString();
+  }
+})();
+
 var urls = ##PLAYER_WHATSAPP_GROUPS_JSON##;
 var playerSocialClickTarget = ##PLAYER_SOCIAL_CLICK_TARGET_JSON##;
 
@@ -1158,6 +1203,7 @@ const video       = document.getElementById('video');
 const vwrap       = document.getElementById('vwrap');
 const iframeWrap  = document.getElementById('iframe-wrap');
 const iframeEl    = document.getElementById('iframe-player');
+const clickOverlay = document.getElementById('iframe-click-overlay');
 const ovLoad      = document.getElementById('ov-load');
 const ovLoadMsg   = document.getElementById('ov-load-msg');
 const ovErr       = document.getElementById('ov-err');
@@ -1461,6 +1507,10 @@ function loadIframe(url) {
   setEngineTry('iframe', 'trying');
   ovLoadMsg.textContent = 'Loading embed...';
 
+  if (clickOverlay) {
+    clickOverlay.style.pointerEvents = 'auto';
+  }
+
   iframeEl.src = url;
   iframeWrap.classList.add('active');
   vwrap.classList.add('iframe-mode');
@@ -1700,7 +1750,7 @@ async function loadShaka(url, mimeHint, onSuccess, onFail) {
   });
 
   try {
-    await shakaPlayer.load(url);
+    await shakaPlayer.load(url, null, mimeHint);
     populateShakaQualities();
     video.play().catch(() => {});
     setEngineTry('shaka', 'success');
@@ -1922,6 +1972,19 @@ vwrap.addEventListener('touchstart', () => {
   clearTimeout(vwrap._ct);
   vwrap._ct = setTimeout(() => vwrap.classList.remove('show-controls'), 3000);
 });
+
+if (clickOverlay) {
+  clickOverlay.addEventListener('click', () => {
+    setTimeout(() => {
+      clickOverlay.style.pointerEvents = 'none';
+    }, 100);
+    setTimeout(() => {
+      if (vwrap.classList.contains('iframe-mode')) {
+        clickOverlay.style.pointerEvents = 'auto';
+      }
+    }, 15000);
+  });
+}
 
 /* ═══════════════════════════════════════════════════════════════
    RETRY
@@ -2331,6 +2394,18 @@ def is_likely_stream_button(text, url, parent_url):
     u = url.lower()
     t = text.lower()
     
+    # Exclude image, style, script, document, font extensions
+    ignored_extensions = {
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tiff",
+        ".css", ".woff", ".woff2", ".ttf", ".eot", ".otf",
+        ".pdf", ".txt", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".7z", ".tar", ".gz",
+        ".js", ".json"
+    }
+    parsed = urlparse(url)
+    path_lower = parsed.path.lower()
+    if any(path_lower.endswith(ext) for ext in ignored_extensions):
+        return False
+        
     # Exclude social/template links
     if any(social in u for social in ["whatsapp.com", "t.me", "telegram.me", "facebook.com", "twitter.com", "instagram.com", "pinterest.com", "linkedin.com", "tumblr.com", "blogger.com/profile", "google.com", "themexpose", "gooyaabi"]):
         return False
@@ -2351,11 +2426,17 @@ def is_likely_stream_button(text, url, parent_url):
         if not is_short_label:
             return False
             
-    # The text must contain stream keywords
-    keywords = ["link", "stream", "watch", "live", "tv", "channel", "player", "android", "ios", "click"]
+    # The text or URL must contain stream keywords
+    keywords = ["link", "stream", "watch", "live", "tv", "channel", "player", "android", "ios", "click", "server", "mirror", "sd", "hd", "play", "quality"]
     if any(k in t for k in keywords):
         return True
         
+    # Fallback: if text is empty/generic/short, but the URL has strong stream indicators
+    url_keywords = ["link=", "stream", "player", "embed", "channel", "ch=", "watch", "live", "server", "mirror", "play", "quality"]
+    if not t.strip() or len(t.strip()) < 5:
+        if any(k in u for k in url_keywords):
+            return True
+            
     return False
 
 def extract_root_links(root_url, headers=None):
@@ -2690,7 +2771,7 @@ def parse_manifest_quality(text, stream_type):
     return quality
 
 
-def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, status_code=None):
+def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, status_code=None, url=None):
     base = {
         "dash": 360,
         "hls": 320,
@@ -2719,6 +2800,13 @@ def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, sta
         base -= 10
     if latency_ms is not None:
         base -= min(int(latency_ms / 100), 60)
+
+    if url:
+        url_lower = url.lower()
+        # Heavy penalty for Amazon Prime Video live streams which are notoriously geoblocked/unstable for general public
+        if any(p in url_lower for p in ["pv-cdn.net", "aiv-cdn.net", "aiv-delivery.net"]):
+            base -= 250
+
     return base
 
 
@@ -2787,14 +2875,21 @@ def extract_embedded_stream_url(url, allow_iframe_candidate=True, _depth=0):
 
 
 def response_cors_ok(response):
-    origin = response.headers.get("access-control-allow-origin", "").strip().lower()
+    origin_header = response.headers.get("access-control-allow-origin", "").strip().lower()
+    if not origin_header:
+        return False
+    origins = {o.strip() for o in origin_header.split(",")}
+    if "*" in origins:
+        return True
     allowed = {
-        "*",
         "https://qtwc2022.blogspot.com",
         "https://www.goforsports.net",
         "https://goforsports.net",
     }
-    return origin in allowed
+    for o in origins:
+        if o in allowed or "blogspot.com" in o or "goforsports.net" in o:
+            return True
+    return False
 
 
 def read_stream_text(response, max_bytes=200000):
@@ -3040,7 +3135,15 @@ def probe_stream_url(url, stream_type, clear_keys=None):
         manifest_text = ""
         manifest_bytes = b""
         if stream_type in ("hls", "dash"):
-            manifest_bytes = b"".join(r.iter_content(chunk_size=8192))
+            manifest_chunks = []
+            manifest_size = 0
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    manifest_chunks.append(chunk)
+                    manifest_size += len(chunk)
+                if manifest_size >= 1000000:
+                    break
+            manifest_bytes = b"".join(manifest_chunks)
             manifest_text = manifest_bytes[:200000].decode("utf-8", errors="ignore")
         elif stream_type == "iframe":
             iframe_html = read_stream_text(r, max_bytes=100000)
@@ -3072,6 +3175,19 @@ def probe_stream_url(url, stream_type, clear_keys=None):
                 result["validation_reason"] = result["error"]
                 return result
 
+            # Robust player signals check to filter out fake iframe/embed pages (which only have ads or redirects)
+            player_signals = [
+                "<video", "<iframe", "<embed", "<object",
+                "jwplayer", "flowplayer", "videojs", "clappr",
+                "hls.js", "dash.js", "shakaplayer", "plyr",
+                ".m3u8", ".mpd", ".mp4", "wmsauthsign",
+                "player", "stream", "live", "playback"
+            ]
+            if not any(sig in iframe_lower for sig in player_signals):
+                result["error"] = "no-player-signals-in-iframe"
+                result["validation_reason"] = result["error"]
+                return result
+
         if stream_type == "hls":
             if not manifest_text.lstrip().startswith("#EXTM3U"):
                 result["error"] = "html-instead-of-hls-manifest"
@@ -3093,8 +3209,9 @@ def probe_stream_url(url, stream_type, clear_keys=None):
             provided_keys = set((clear_keys or {}).keys())
             missing_keys = manifest_kids - provided_keys
             if missing_keys:
-                result["backup"] = True
-                result["validation_reason"] = "drm-key-missing-backup"
+                result["error"] = "drm-keys-missing"
+                result["validation_reason"] = f"missing-keys:{','.join(missing_keys)}"
+                return result
             init_ok, init_reason, init_status = probe_dash_init_segment(r.url, manifest_bytes, headers)
             result["media_probe_status"] = init_status
             if not init_ok:
@@ -3107,13 +3224,14 @@ def probe_stream_url(url, stream_type, clear_keys=None):
         quality = parse_manifest_quality(manifest_text, stream_type)
         result.update(quality)
         result["working"] = True
-        result["validation_status"] = "backup" if result["backup"] else "ok"
+        result["validation_status"] = "ok"
         result["score"] = score_stream_probe(
             stream_type,
             result["latency_ms"],
             height=result["height"],
             bandwidth=result["bandwidth"],
             status_code=result["status_code"],
+            url=url,
         )
         if result["backup"]:
             result["score"] -= 180
@@ -3283,7 +3401,11 @@ def main():
   </div>
   <video id="video" controls autoplay playsinline></video>
   <div id="iframe-wrap" style="display:none; width:100%; height:100%;">
-    <iframe id="iframe-el" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+    <iframe id="iframe-el"
+      allow="autoplay; encrypted-media; picture-in-picture"
+      sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
+      referrerpolicy="no-referrer"
+      allowfullscreen></iframe>
   </div>
 </div>
 <script>
@@ -3740,9 +3862,9 @@ def main():
             
             iframe_rows.append(f"""
             <div class="card">
-              <h3>{html.escape(label)}</h3>
-              <p>Format: {html.escape(item['meta'])}</p>
-              <code>{html.escape(iframe_tag)}</code>
+              <h3>{html_escape(label)}</h3>
+              <p>Format: {html_escape(item['meta'])}</p>
+              <code>{html_escape(iframe_tag)}</code>
             </div>
             """)
             

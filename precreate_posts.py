@@ -90,7 +90,7 @@ DEFAULT_AD_POPUP = """
     }, 3000); // Trigger popup after 3 seconds
   });
 </script>
-<!-- PropellerAds / Monetag Integration Scripts -->
+<!-- Adsterra Integration Scripts -->
 <script type="text/javascript" src="https://throughalivemedication.com/45/96/a9/4596a9a27ac7c137dd494fd1f200edbb.js"></script>
 <script type="text/javascript" src="https://pl17973087.effectivecpmnetwork.com/45/96/a9/4596a9a27ac7c137dd494fd1f200edbb.js"></script>
 <script type="text/javascript" src="https://pl17973277.effectivecpmnetwork.com/66/f1/17/66f11775fe2744312299821ac71b38f1.js"></script>
