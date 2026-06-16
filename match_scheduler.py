@@ -698,6 +698,63 @@ def source_urls_for_match(match):
     return []
 
 
+# Patterns in URL paths that indicate generic non-match content pages
+_GENERIC_CONTENT_PATTERNS = [
+    "best-fifa", "best-goals", "best-world-cup", "top-10",
+    "history", "world-cup-fans", "all-time",
+    "privacy", "disclaimer", "about", "contact", "terms",
+]
+
+
+def sanitize_source_urls(source_urls, match_name):
+    """Filter out malformed, wrong-match, and generic content source URLs.
+
+    Returns only URLs that are plausibly relevant to the given match.
+    """
+    if not source_urls or not match_name:
+        return source_urls
+
+    clean = []
+    match_tokens = normalize_match_tokens(match_name)
+
+    for url in source_urls:
+        url = str(url or "").strip()
+        if not url:
+            continue
+
+        # Reject malformed URLs (e.g. containing brackets from bad scraping)
+        if "[" in url or "]" in url or " " in url:
+            print(f"  [!] Dropping malformed source URL: {url[:80]}")
+            continue
+
+        parsed = urlparse(url)
+        path_lower = parsed.path.lower()
+
+        # Reject generic non-match content pages
+        if any(pattern in path_lower for pattern in _GENERIC_CONTENT_PATTERNS):
+            print(f"  [!] Dropping generic content URL: {url[:80]}")
+            continue
+
+        # For URLs that have a clear match-name pattern in the path
+        # (e.g. /2026/06/argentina-vs-algeria.html), verify it matches OUR match
+        path_text = parsed.path.replace("/", " ").replace("-", " ").replace("_", " ")
+        path_tokens = normalize_match_tokens(path_text)
+        # If the path contains two identifiable team names and NEITHER matches
+        # our match, it's likely a wrong-match page
+        if path_tokens and match_tokens:
+            score = match_source_score(match_name, path_text)
+            # If the path has team-like content but scores 0 for our match
+            # AND has a "vs" indicator, it's definitely the wrong match
+            vs_pattern = re.search(r'\bvs?\b', path_text, flags=re.IGNORECASE)
+            if vs_pattern and score == 0 and len(path_tokens) >= 2:
+                print(f"  [!] Dropping wrong-match URL (score=0): {url[:80]}")
+                continue
+
+        clean.append(url)
+
+    return clean
+
+
 def append_source_to_match(match, source_url, max_sources, score=0):
     urls = source_urls_for_match(match)
     canon_existing = {canonical_url(u) for u in urls}
@@ -835,7 +892,29 @@ def extract_match_name_from_candidate(candidate_text):
     return None
 
 
-def auto_discover_matches(force=False):
+def has_active_match_now(schedule=None, scheduler_config=None):
+    """Check if any match is currently within its active window."""
+    try:
+        if schedule is None:
+            automation_config = load_automation_config()
+            schedule = load_schedule(automation_config)
+            scheduler_config = get_scheduler_config(automation_config)
+        now = datetime.now(timezone.utc)
+        for match in schedule:
+            if match.get("status") in ("completed",):
+                continue
+            try:
+                run_start, run_end, _ = active_window(match, scheduler_config)
+                if run_start <= now <= run_end:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
+def auto_discover_matches(force=False, skip_if_active_match=False):
     global last_discovery_time
     now_ts = time.time()
     automation_config = load_automation_config()
@@ -852,6 +931,11 @@ def auto_discover_matches(force=False):
     persisted_last = float(state.get("last_source_refresh_ts") or 0)
     effective_last = max(float(last_discovery_time or 0), persisted_last)
     if not force and effective_last > 0 and (now_ts - effective_last) < interval:
+        return
+
+    # Defer discovery when a match is actively live — prioritize match processing
+    if skip_if_active_match and has_active_match_now(schedule, scheduler_config):
+        print("[*] Deferring source discovery — active match window detected; prioritizing match processing.")
         return
 
     print("[*] Running source discovery/refresh for upcoming matches...")
@@ -880,7 +964,7 @@ def auto_discover_matches(force=False):
         try:
             # Use browser-based fetch for JS-heavy portals (same as generate_player.py)
             from generate_player import fetch_page_html, should_use_browser
-            html, success, method = fetch_page_html(portal, headers=headers, use_browser=should_use_browser(portal), timeout=12)
+            html, success, method = fetch_page_html(portal, headers=headers, use_browser=should_use_browser(portal), timeout=5)
             if not success or not html:
                 continue
 
@@ -1061,11 +1145,8 @@ def check_and_run():
     except Exception as e:
         print(f"[-] Fixture synchronization failed: {e}")
 
-    # Run auto-discovery first
-    try:
-        auto_discover_matches()
-    except Exception as e:
-        print(f"[-] Auto-discovery failed: {e}")
+    # Defer auto-discovery until after match processing (moved below)
+    # This avoids blocking active match scraping with 60-90s of portal scanning
 
     automation_config = load_automation_config()
     schedule = load_schedule(automation_config)
@@ -1180,6 +1261,15 @@ def check_and_run():
                 
                 # Step 1: Run generate_player.py to crawl and produce player file
                 sources = source_urls_for_match(match)
+                # Sanitize source URLs: remove malformed, wrong-match, and generic content pages
+                if sources:
+                    clean_sources = sanitize_source_urls(sources, match.get("match_name", ""))
+                    if len(clean_sources) < len(sources):
+                        removed = len(sources) - len(clean_sources)
+                        print(f"[*] Filtered {removed} junk/irrelevant source URL(s) for {match['match_name']}")
+                        sources = clean_sources
+                        # Persist the cleaned-up source list
+                        match["source_url"] = sources if len(sources) > 1 else (sources[0] if sources else "")
                 if not sources:
                     print(f"[!] No source URLs available yet for {match['match_name']}; waiting for source discovery.")
                     if portal_updates_enabled and not match.get("new_blog_prepare_set") and not match.get("new_blog_iframe_set"):
@@ -1509,6 +1599,12 @@ def check_and_run():
         if archived_after:
             print(f"[*] Archived {len(archived_after)} completed match(es) after scheduler run.")
         save_schedule(schedule, automation_config)
+
+    # Run auto-discovery AFTER match processing to avoid blocking live match updates
+    try:
+        auto_discover_matches()
+    except Exception as e:
+        print(f"[-] Auto-discovery failed: {e}")
 
 def main():
     import argparse

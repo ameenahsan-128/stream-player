@@ -237,13 +237,32 @@ def is_junk_iframe(url, source_urls=None):
     portal_domains = {
         "epicsports.in", "epicsports.blog", "footem.co.in", "90live.in",
         "yallatvlive.com", "notebookpot.com", "sportstrack.me", "soccervent.xyz",
-        "epicsportss.com", "scoopnonstop.com", "blogspot.com", "pages.dev"
+        "epicsportss.com", "scoopnonstop.com", "blogspot.com", "pages.dev",
+        "gamesaved.xyz"
     }
     is_portal_domain = any(domain == pd or domain.endswith("." + pd) for pd in portal_domains)
     if is_portal_domain:
-        player_keywords = ["embed", "player", "stream", "watch", "live", "play", "ch"]
-        if not path_clean or path_clean in ("index.html", "index.php", "home.html", "m=1") or not any(kw in path_lower for kw in player_keywords):
-            return True
+        # Only allow pages that look like actual embed players, not raw website pages
+        # Require strong embed indicators in the path - "live" alone is too generic
+        embed_keywords = ["embed", "player", "ch=", "albaplayer"]
+        has_embed_path = any(kw in path_lower for kw in embed_keywords)
+        # Weak keywords that need additional context (not just /p/some-live-page.html)
+        weak_keywords = ["stream", "watch", "play"]
+        has_weak_path = any(kw in path_lower for kw in weak_keywords)
+        # /p/ pages on blogspot/portals are almost always content pages, not embeddable players
+        is_blogspot_page = "/p/" in path_lower
+        if not has_embed_path:
+            if is_blogspot_page or not has_weak_path:
+                return True
+
+    # Reject raw website URLs that look like content/article pages (not embeddable players)
+    raw_website_indicators = [
+        "scroll-down", "enjoy-live-match", "match-preview", "live-score",
+        "lineup", "telecast", "preview", "schedule", "highlights",
+        "how-to-watch", "where-to-watch", "kick-off",
+    ]
+    if any(ind in path_lower for ind in raw_website_indicators):
+        return True
     
     # Check domain blocklist
     for pattern in JUNK_IFRAME_DOMAIN_PATTERNS:
@@ -481,6 +500,8 @@ body {
   background: #000;
 }
 video { width:100%; height:100%; display:block; background:#000; }
+/* hide native video in iframe mode to prevent gap behind iframe */
+.video-wrap.iframe-mode video { display: none; }
 
 /* iframe mode */
 .iframe-wrap {
@@ -488,12 +509,14 @@ video { width:100%; height:100%; display:block; background:#000; }
   inset: 0;
   display: none;
   z-index: 5;
+  overflow: hidden;
 }
 .iframe-wrap iframe {
   width: 100%;
   height: 100%;
   border: none;
   display: block;
+  overflow: hidden;
 }
 .iframe-wrap.active { display: block; }
 
@@ -894,7 +917,8 @@ input[type=range].vol-slider {
           allowfullscreen
           allow="autoplay; encrypted-media; picture-in-picture"
           sandbox="allow-scripts allow-same-origin allow-presentation"
-          referrerpolicy="no-referrer"></iframe>
+          referrerpolicy="no-referrer"
+          scrolling="no"></iframe>
         <div id="iframe-click-overlay" style="position: absolute; inset: 0; z-index: 8; cursor: pointer; background: transparent;"></div>
       </div>
 
@@ -1187,12 +1211,15 @@ function detectType(url, override) {
 
 function looksLikeEmbed(url) {
   const u = url.toLowerCase();
+  // Only return true for URLs with strong embed/player indicators
+  // Do NOT default to iframe for any non-media URL — that embeds raw websites
   return (
-    u.includes('/embed') || u.includes('/player') || u.includes('/live/') ||
+    u.includes('/embed') || u.includes('/player') ||
     u.includes('youtube') || u.includes('dailymotion') || u.includes('twitch') ||
-    u.includes('vimeo') || u.includes('facebook') || u.includes('streamable') ||
+    u.includes('vimeo') || u.includes('streamable') ||
     u.includes('ok.ru') || u.includes('rutube') || u.includes('odysee') ||
-    (!url.split('?')[0].match(/\.(mpd|m3u8|mp4|webm|ogg|ts|mkv|flv|avi)$/i))
+    u.includes('albaplayer') || u.includes('/ch') ||
+    (u.includes('/live/') && (u.includes('embed') || u.includes('player') || u.includes('/ch')))
   );
 }
 
@@ -2813,12 +2840,30 @@ def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, sta
 def infer_stream_type_from_url(url):
     parsed = urlparse(url)
     path_lower = parsed.path.lower()
+    url_lower = url.lower()
     if path_lower.endswith(".mpd") or "manifest.mpd" in path_lower or "/dash/" in path_lower:
         return "dash"
     if path_lower.endswith(".m3u8") or "playlist.m3u8" in path_lower or "/hls/" in path_lower:
         return "hls"
     if any(path_lower.endswith(ext) for ext in [".mp4", ".webm", ".ogg", ".ts", ".mkv"]):
         return "native"
+    # Only classify as iframe if the URL has strong embed/player indicators.
+    # This prevents raw website pages from being embedded in the player.
+    embed_indicators = [
+        "/embed", "/player", "albaplayer", "/ch",
+        "youtube.com", "dailymotion.com", "twitch.tv", "vimeo.com",
+        "streamable.com", "ok.ru", "rutube.ru", "odysee.com",
+    ]
+    query_lower = parsed.query.lower()
+    # Check for embed indicators in path or domain
+    if any(ind in url_lower for ind in embed_indicators):
+        return "iframe"
+    # Check for stream-related query parameters that suggest an embed wrapper
+    embed_query_keys = {"src", "url", "file", "dtv", "hls", "mpd", "source", "embed", "stream"}
+    query_params = parse_qs(parsed.query, keep_blank_values=True)
+    for key in query_params:
+        if key.lower() in embed_query_keys:
+            return "iframe"
     return "iframe"
 
 
@@ -3175,17 +3220,37 @@ def probe_stream_url(url, stream_type, clear_keys=None):
                 result["validation_reason"] = result["error"]
                 return result
 
-            # Robust player signals check to filter out fake iframe/embed pages (which only have ads or redirects)
-            player_signals = [
+            # Strong player signals: actual HTML player elements, known player libraries,
+            # or media file references. Generic words like "player", "stream", "live" are
+            # NOT strong signals — every sports website has those.
+            strong_player_signals = [
                 "<video", "<iframe", "<embed", "<object",
                 "jwplayer", "flowplayer", "videojs", "clappr",
                 "hls.js", "dash.js", "shakaplayer", "plyr",
                 ".m3u8", ".mpd", ".mp4", "wmsauthsign",
-                "player", "stream", "live", "playback"
+                "mediaelement", "bitmovin", "theoplayer",
+                "new hls(", "new shaka", "new dashjs",
+                "createplayer", "initplayer", "loadplayer",
+                "playsinline", "autoplay",
             ]
-            if not any(sig in iframe_lower for sig in player_signals):
+            if not any(sig in iframe_lower for sig in strong_player_signals):
                 result["error"] = "no-player-signals-in-iframe"
                 result["validation_reason"] = result["error"]
+                return result
+
+            # Detect raw website pages that have player elements but are full websites
+            # (navigation bars, multiple articles, sidebars, etc.) — not embeddable players
+            raw_website_signals = [
+                "<nav", "<header", "<footer", "<aside",
+                "class=\"sidebar", "class=\"navbar", "class=\"menu",
+                "class=\"article", "class=\"post-body",
+                "class=\"widget", "class=\"blog-post",
+            ]
+            raw_signal_count = sum(1 for sig in raw_website_signals if sig in iframe_lower)
+            # If the page has 3+ raw website signals, it's likely a full website, not an embed
+            if raw_signal_count >= 3:
+                result["error"] = "iframe-is-raw-website"
+                result["validation_reason"] = f"raw-website-signals:{raw_signal_count}"
                 return result
 
         if stream_type == "hls":
