@@ -889,6 +889,36 @@ def render_portal_shell(config, match, inner_html, state="upcoming", hero_html="
     social_row = portal_row(social_html, padding="12px") if social_html else ""
     return f"""
 {hero_html}
+<style type="text/css">
+/* Hide Google AdSense ads and auto-placed containers */
+ins.adsbygoogle, .google-auto-placed, #google_image_div, [id^="google_ads_iframe"], iframe[src*="googleads"], iframe[id^="aswift"] {{
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  width: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}}
+/* Hide Adsterra Social Bar fake robot captcha overlay */
+[class*="pl-66f11775fe2744312299821ac71b38f1__"], [class*="pl-"][class*="__"] {{
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}}
+</style>
+<script type="text/javascript">
+(function() {{
+  // Periodically clean up Google AdSense scripts and container overlays
+  setInterval(function() {{
+    var ads = document.querySelectorAll('ins.adsbygoogle, iframe[id^="google_ads"], .google-auto-placed, iframe[src*="googleads"], iframe[id^="aswift"]');
+    ads.forEach(function(a) {{ a.remove(); }});
+    // Remove Adsterra Social Bar robot verification overlay
+    var robotOverlays = document.querySelectorAll('[class*="pl-66f11775fe2744312299821ac71b38f1__"], [class*="pl-"][class*="__"]');
+    robotOverlays.forEach(function(o) {{ o.remove(); }});
+  }}, 200);
+}})();
+</script>
 <table border="0" cellpadding="0" cellspacing="0" style="font-family:Ubuntu, Poppins, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background:#ffffff; border-collapse:collapse; border:1px solid #000000; color:#222222; margin:12px auto; max-width:760px; width:100%; box-sizing:border-box;">
   <tbody>
   {inner_html}
