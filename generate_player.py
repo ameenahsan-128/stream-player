@@ -893,7 +893,7 @@ input[type=range].vol-slider {
         <iframe id="iframe-player"
           allowfullscreen
           allow="autoplay; encrypted-media; picture-in-picture"
-          sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
+          sandbox="allow-scripts allow-same-origin allow-presentation"
           referrerpolicy="no-referrer"></iframe>
         <div id="iframe-click-overlay" style="position: absolute; inset: 0; z-index: 8; cursor: pointer; background: transparent;"></div>
       </div>
@@ -3403,7 +3403,7 @@ def main():
   <div id="iframe-wrap" style="display:none; width:100%; height:100%;">
     <iframe id="iframe-el"
       allow="autoplay; encrypted-media; picture-in-picture"
-      sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
+      sandbox="allow-scripts allow-same-origin allow-presentation"
       referrerpolicy="no-referrer"
       allowfullscreen></iframe>
   </div>
