@@ -2765,9 +2765,24 @@ def extract_final_stream_details(tree):
             
         iframes = find_all_iframes(tree)
         if iframes:
-            streams = iframes
-            stream_type = "iframe"
-            player = "iframe"
+            # Try to unwrap relay/hub pages to find real streams inside
+            unwrapped = _unwrap_iframe_relay_pages(iframes)
+            if unwrapped:
+                streams = unwrapped
+                # Re-detect stream type from unwrapped URLs
+                for s in streams:
+                    st = infer_stream_type_from_url(s)
+                    if st in ("hls", "dash", "native"):
+                        stream_type = st
+                        player = {"hls": "hls.js", "dash": "shaka", "native": "html5"}.get(st, "unknown")
+                        break
+                else:
+                    stream_type = "iframe"
+                    player = "iframe"
+            else:
+                streams = iframes
+                stream_type = "iframe"
+                player = "iframe"
             
     return {
         "streams": streams,
@@ -2775,6 +2790,95 @@ def extract_final_stream_details(tree):
         "player": player,
         "type": stream_type
     }
+
+
+def _unwrap_iframe_relay_pages(iframe_urls):
+    """Fetch Blogger relay pages and extract the real stream URLs from inside them.
+    
+    Relay pages like 'enjoy-live-match-2.html' or 'scroll-down-and-watch-live.html'
+    contain inner iframes that point to actual stream players with ?url=, ?b4x= params
+    containing m3u8/mpd URLs.
+    """
+    relay_indicators = [
+        "enjoy-live-match", "scroll-down", "watch-live", "live-match",
+        "/p/", "blogspot.com",
+    ]
+    
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    unwrapped = []
+    seen = set()
+    
+    for iframe_url in iframe_urls:
+        url_lower = iframe_url.lower()
+        # Only attempt unwrapping for URLs that look like relay/hub pages
+        is_relay = any(ind in url_lower for ind in relay_indicators)
+        if not is_relay:
+            # Keep non-relay iframes as-is (albaplayer, embed URLs, etc.)
+            if iframe_url not in seen:
+                unwrapped.append(iframe_url)
+                seen.add(iframe_url)
+            continue
+        
+        try:
+            r = requests.get(iframe_url, headers=headers, timeout=8)
+            if r.status_code != 200:
+                continue
+            html = r.text
+            
+            # Extract inner iframes from the relay page
+            inner_iframes = re.findall(
+                r'<iframe[^>]+src=["\x27]([^"\x27]+)["\x27]', html, re.IGNORECASE
+            )
+            
+            for inner_url in inner_iframes:
+                if not inner_url.startswith("http"):
+                    inner_url = urljoin(iframe_url, inner_url)
+                
+                # Skip junk iframes (youtube placeholder, vimeo placeholder, cbox, etc.)
+                if is_junk_iframe(inner_url):
+                    continue
+                # Skip placeholder/empty embeds and chat widgets
+                inner_lower = inner_url.lower()
+                if any(p in inner_lower for p in [
+                    "cbox.ws", "disqus.com", "facebook.com/plugins",
+                ]):
+                    continue
+                # Skip embeds with empty IDs (placeholder templates like youtube.com/embed/ or vimeo.com/video/)
+                path_stripped = urlparse(inner_url).path.rstrip("/")
+                if path_stripped in ("/embed", "/video") or not path_stripped:
+                    continue
+                
+                # Try to extract embedded stream URL from query params (?url=, ?b4x=, etc.)
+                embedded = extract_embedded_stream_url(inner_url)
+                if embedded and embedded not in seen:
+                    unwrapped.append(embedded)
+                    seen.add(embedded)
+                    inner_type = infer_stream_type_from_url(embedded)
+                    print(f"  [+] Unwrapped relay iframe: {inner_type.upper()} stream from {urlparse(iframe_url).netloc}")
+                elif inner_url not in seen:
+                    # If we can't extract a direct stream, keep the inner iframe
+                    # (it's still better than the outer relay page)
+                    unwrapped.append(inner_url)
+                    seen.add(inner_url)
+                    print(f"  [+] Unwrapped relay: inner embed from {urlparse(iframe_url).netloc}")
+            
+            # Also scan for direct m3u8/mpd URLs in the page JS/HTML
+            direct_streams = re.findall(
+                r'["\x27](https?://[^"\x27\s]+\.(?:m3u8|mpd)[^"\x27\s]*)["\x27]',
+                html, re.IGNORECASE
+            )
+            for stream_url in direct_streams:
+                if stream_url not in seen:
+                    unwrapped.append(stream_url)
+                    seen.add(stream_url)
+                    print(f"  [+] Unwrapped relay: direct stream URL from {urlparse(iframe_url).netloc}")
+                    
+        except Exception as e:
+            print(f"  [-] Failed to unwrap relay {iframe_url[:60]}: {e}")
+            continue
+    
+    return unwrapped if unwrapped else None
+
 
 def parse_manifest_quality(text, stream_type):
     quality = {"height": None, "bandwidth": None}
