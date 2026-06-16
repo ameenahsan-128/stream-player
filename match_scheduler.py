@@ -543,6 +543,150 @@ def update_portal_match_page(automation_config, new_config, new_token, match, st
     record_content_hash(match, "stream_page", page_html)
     return page_url
 
+
+# ── URL Template Prediction Engine ──────────────────────────────────────
+# Learns slug patterns from domains that worked for past matches,
+# then predicts URLs for upcoming matches using those patterns.
+# Runs as a fast first layer (~5s) before slow portal scanning (~60-90s).
+
+# Known slug generators: given a match name, produce candidate slugs
+# Each entry: (domain_base, slug_function, suffix)
+# The slug_function receives (team1, team2) lowercased and returns a slug string.
+
+_SLUG_PATTERNS = [
+    # Pattern: {team1}-vs-{team2}.html  (most common — scoopnonstop, footem, sportscorner)
+    {
+        "domains": [
+            "football.scoopnonstop.com",
+            "es.footem.in",
+            "sportscorner3697.blogspot.com",
+        ],
+        "base": "/2026/06/",
+        "slug": lambda t1, t2: f"{t1}-vs-{t2}",
+        "suffix": ".html",
+    },
+    # Pattern: {team1}-vs-{team2}-live-score-preview.html  (90live)
+    {
+        "domains": ["90live.yallatvlive.com"],
+        "base": "/2026/06/",
+        "slug": lambda t1, t2: f"{t1}-vs-{t2}-live-score-preview",
+        "suffix": ".html",
+    },
+    # Pattern: {t1_abbr}-vs-{t2_abbr}.html  (sportstrack — first 3-4 chars)
+    {
+        "domains": ["sportstrack.yallatvlive.com"],
+        "base": "/2026/06/",
+        "slug": lambda t1, t2: f"{t1[:4].rstrip('-')}-vs-{t2[:4].rstrip('-')}",
+        "suffix": ".html",
+    },
+]
+
+# Map of match name words to the slug form used by different portals
+_TEAM_SLUG_MAP = {
+    "cabo verde": "cape-verde",
+    "cape verde": "cape-verde",
+    "ivory coast": "ivory-coast",
+    "new zealand": "new-zealand",
+    "south africa": "south-africa",
+    "saudi arabia": "saudi-arabia",
+    "south korea": "south-korea",
+    "costa rica": "costa-rica",
+    "united states": "united-states",
+    "turkiye": "turkey",
+}
+
+
+def _match_name_to_teams(match_name):
+    """Split 'Team1 Vs Team2' into (slug_team1, slug_team2)."""
+    parts = re.split(r'\s+vs?\s+', match_name.strip(), maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) != 2:
+        return None, None
+    t1 = parts[0].strip().lower()
+    t2 = parts[1].strip().lower()
+    # Apply slug mapping for multi-word team names
+    t1 = _TEAM_SLUG_MAP.get(t1, t1.replace(" ", "-"))
+    t2 = _TEAM_SLUG_MAP.get(t2, t2.replace(" ", "-"))
+    return t1, t2
+
+
+def predict_source_urls(match):
+    """Generate predicted source URLs for a match using known domain patterns.
+    
+    Returns list of (url, domain) tuples for URLs that are predicted to exist.
+    """
+    match_name = match.get("match_name", "")
+    t1, t2 = _match_name_to_teams(match_name)
+    if not t1 or not t2:
+        return []
+
+    candidates = []
+    for pattern in _SLUG_PATTERNS:
+        slug = pattern["slug"](t1, t2)
+        for domain in pattern["domains"]:
+            url = f"https://{domain}{pattern['base']}{slug}{pattern['suffix']}"
+            candidates.append((url, domain))
+
+    return candidates
+
+
+def run_source_prediction(schedule, scheduler_config, automation_config):
+    """Fast source prediction pass: generate + verify URLs for matches with few sources.
+    
+    Uses HEAD requests (~3s timeout) to verify predicted URLs exist before adding them.
+    Only runs for matches within the source discovery window.
+    """
+    max_sources = int(scheduler_config.get("max_sources_per_match") or 12)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    now_utc = datetime.now(timezone.utc)
+    predicted_any = False
+
+    for match in schedule:
+        if match.get("status") in ("completed", "ended"):
+            continue
+
+        # Only predict for matches within discovery window
+        if not within_source_discovery_window(match, scheduler_config, now_utc):
+            continue
+
+        current_sources = source_urls_for_match(match)
+        current_count = len(current_sources)
+
+        # Skip if already has enough sources
+        if current_count >= 6:
+            continue
+
+        existing_canons = {canonical_url(u) for u in current_sources}
+        candidates = predict_source_urls(match)
+        if not candidates:
+            continue
+
+        added = 0
+        for url, domain in candidates:
+            if canonical_url(url) in existing_canons:
+                continue
+            if current_count + added >= max_sources:
+                break
+
+            # Quick HEAD check to verify URL exists
+            try:
+                r = requests.head(url, headers=headers, timeout=3, allow_redirects=True)
+                if r.status_code == 200:
+                    if append_source_to_match(match, url, max_sources, score=3):
+                        existing_canons.add(canonical_url(url))
+                        added += 1
+                        predicted_any = True
+                        print(f"[+] Predicted source verified: {match.get('match_name')} <- {domain}")
+            except Exception:
+                continue
+
+        if added:
+            print(f"[+] Added {added} predicted source(s) for {match.get('match_name')} (total: {current_count + added})")
+
+    if predicted_any:
+        save_schedule(schedule, automation_config)
+        print("[+] Schedule saved after source prediction.")
+
+
 last_discovery_time = 0
 
 MATCH_ALIASES = {
@@ -551,17 +695,20 @@ MATCH_ALIASES = {
     "switz": "switzerland",
     "switzrlnd": "switzerland",
     "swi": "switzerland",
+    "sui": "switzerland",
     "scot": "scotland",
     "scotlnd": "scotland",
     "sco": "scotland",
     "tur": "turkiye",
     "turk": "turkiye",
     "turkey": "turkiye",
+    "turkye": "turkiye",
     "aus": "australia",
     "austrliaturky": "australia turkiye",
     "bra": "brazil",
     "mor": "morocco",
     "moroco": "morocco",
+    "moro": "morocco",
     "para": "paraguay",
     "par": "paraguay",
     "canad": "canada",
@@ -569,7 +716,35 @@ MATCH_ALIASES = {
     "safrica": "south africa",
     "korea": "korea",
     "czech": "czechia",
-    "czechia": "czechia"
+    "czechia": "czechia",
+    # Epicsports portal abbreviations
+    "irn": "iran",
+    "nzlnd": "zealand",
+    "nwzlnd": "zealand",
+    "ksa": "saudi",
+    "urugy": "uruguay",
+    "uru": "uruguay",
+    "germny": "germany",
+    "curcao": "curacao",
+    "nthlnds": "netherlands",
+    "jpan": "japan",
+    "swden": "sweden",
+    "tnsia": "tunisia",
+    "ivorycst": "ivory",
+    "ecdor": "ecuador",
+    "sene": "senegal",
+    "bel": "belgium",
+    "egyp": "egypt",
+    "hai": "haiti",
+    "esp": "spain",
+    "cabo": "verde",
+    "cape": "verde",
+    "fra": "france",
+    "arg": "argentina",
+    "alg": "algeria",
+    "nor": "norway",
+    "irq": "iraq",
+    "jor": "jordan",
 }
 
 MATCH_STOP_WORDS = {
@@ -836,6 +1011,15 @@ def extract_discovery_candidates(portal, html, trusted_domains):
         path_lower = parsed.path.lower()
         if any(path_lower.endswith(ext) for ext in ignored_extensions):
             continue
+        # Block generic hub/content pages at discovery time
+        if any(pattern in path_lower for pattern in _GENERIC_CONTENT_PATTERNS):
+            continue
+        # Block malformed URLs
+        if "[" in resolved_url or "]" in resolved_url:
+            continue
+        # Block search result pages
+        if "/search?" in resolved_url or "/search/" in path_lower:
+            continue
         canon = canonical_url(resolved_url)
         if canon in seen:
             continue
@@ -872,6 +1056,14 @@ def extract_discovery_candidates(portal, html, trusted_domains):
             continue
         path_lower = parsed.path.lower()
         if any(path_lower.endswith(ext) for ext in ignored_extensions):
+            continue
+        # Block generic hub/content pages at discovery time
+        if any(pattern in path_lower for pattern in _GENERIC_CONTENT_PATTERNS):
+            continue
+        # Block malformed URLs and search pages
+        if "[" in resolved_url or "]" in resolved_url:
+            continue
+        if "/search?" in resolved_url or "/search/" in path_lower:
             continue
         canon = canonical_url(resolved_url)
         if canon in seen:
@@ -1167,6 +1359,26 @@ def check_and_run():
     if archived:
         print(f"[*] Archived {len(archived)} completed match(es) before scheduler run.")
         changed = True
+
+    # Purge junk source URLs from all pending/active matches
+    for match in schedule:
+        if match.get("status") in ("completed",):
+            continue
+        sources = source_urls_for_match(match)
+        if sources:
+            clean = sanitize_source_urls(sources, match.get("match_name", ""))
+            if len(clean) < len(sources):
+                removed = len(sources) - len(clean)
+                print(f"[*] Purged {removed} junk source URL(s) from {match.get('match_name')}")
+                match["source_url"] = clean if len(clean) > 1 else (clean[0] if clean else "")
+                changed = True
+
+    # Fast source prediction: instantly generate + verify URLs from known patterns
+    # Runs in ~5s vs 60-90s for portal scanning — fills gaps for matches with few sources
+    try:
+        run_source_prediction(schedule, scheduler_config, automation_config)
+    except Exception as e:
+        print(f"[-] Source prediction error (non-fatal): {e}")
 
     for match in schedule:
         status = match.get("status", "pending")
