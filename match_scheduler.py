@@ -972,6 +972,107 @@ def sanitize_source_urls(source_urls, match_name):
     return clean
 
 
+def resolve_source_shortcuts(source_urls):
+    """Pre-resolve L1 wrapper pages to their L2/L3 targets.
+
+    Many source pages are simple wrappers with a single "Click Here" button
+    linking to an intermediate page (e.g. ``/p/match-info-1.html``) that is
+    closer to the actual streams.  Pages may also have plain ``<a>`` links to
+    external blogger pages that host stream embeds directly.
+
+    By resolving these *before* the deep scrape, we effectively save 1-2 crawl
+    levels and reduce scrape time significantly.
+
+    Returns a new list of URLs with shortcuts resolved.
+    """
+    from generate_player import (
+        fetch_page_html, EpicLinkParser, is_likely_stream_button,
+    )
+    import re as _re
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    resolved = []
+    resolved_set = set()  # dedup
+
+    # Domains known to host stream embeds — plain links to these are valuable
+    _STREAM_HOST_PATTERNS = (
+        "blogspot.com", "github.io", "pages.dev",
+        "cloudfront.net", "akamaihd.net",
+        "bbvplayline", "kooralive", "albaplayer",
+        "huminbird.cn", "akiwat.com", "cinearena",
+        "lordatomic", "footem-player", "muesra",
+    )
+
+    # Domains to SKIP (ads, analytics, social, theme providers)
+    _SKIP_DOMAINS = (
+        "google", "facebook", "twitter", "instagram", "whatsapp",
+        "youtube.com", "vimeo.com", "telegram", "pinterest",
+        "doubleclick", "googlesyndication", "gooyaabi",
+        "themexpose", "jsdelivr", "cloudflare", "recaptcha",
+        "criteo", "safeframe",
+    )
+
+    for url in source_urls:
+        try:
+            html, ok, _ = fetch_page_html(url, headers=headers, use_browser=False, timeout=6)
+            if not ok or not html:
+                if url not in resolved_set:
+                    resolved.append(url)
+                    resolved_set.add(url)
+                continue
+
+            parser = EpicLinkParser(url)
+            parser.feed(html)
+            source_domain = urlparse(url).netloc.lower()
+
+            # 1) Collect stream button links (e.g. "Click Here", "Watch Live")
+            buttons_found = False
+            for item in parser.results:
+                if item["tag"] in ("a", "button"):
+                    if is_likely_stream_button(item["text"], item["url"], url) and item["url"] != url:
+                        btn_url = item["url"]
+                        if btn_url not in resolved_set:
+                            resolved.append(btn_url)
+                            resolved_set.add(btn_url)
+                            print(f"  [⚡] Resolved button: {url[:55]} → {btn_url[:55]}")
+                            buttons_found = True
+
+            # 2) Collect plain external links to known stream-hosting domains
+            all_hrefs = _re.findall(r'href=["\x27](https?://[^"\x27]+)["\x27]', html, _re.I)
+            for href in all_hrefs:
+                href_domain = urlparse(href).netloc.lower()
+                # Skip same-domain, skip junk
+                if href_domain == source_domain:
+                    continue
+                if any(skip in href_domain for skip in _SKIP_DOMAINS):
+                    continue
+                # Accept if it matches a known stream-hosting pattern
+                if any(pat in href_domain or pat in href.lower() for pat in _STREAM_HOST_PATTERNS):
+                    # Skip blogger infrastructure (CSS, feeds, comment frames, navbar)
+                    path_lower = urlparse(href).path.lower()
+                    if any(skip in path_lower for skip in ("/static/", "/feeds/", "/dyn-css/", "/navbar/", "/comment/")):
+                        continue
+                    if any(skip in href.lower() for skip in ("css_bundle", "authorization.css", "/profile/")):
+                        continue
+                    if href not in resolved_set:
+                        resolved.append(href)
+                        resolved_set.add(href)
+                        print(f"  [⚡] Resolved ext link: {url[:45]} → {href[:65]}")
+
+            # If no buttons AND no external links found, keep the original
+            if not buttons_found and url not in resolved_set:
+                resolved.append(url)
+                resolved_set.add(url)
+
+        except Exception:
+            if url not in resolved_set:
+                resolved.append(url)
+                resolved_set.add(url)
+
+    if len(resolved) != len(source_urls):
+        print(f"  [⚡] Source shortcuts: {len(source_urls)} URLs → {len(resolved)} after resolution")
+    return resolved
+
+
 def append_source_to_match(match, source_url, max_sources, score=0):
     urls = source_urls_for_match(match)
     canon_existing = {canonical_url(u) for u in urls}
@@ -1354,6 +1455,42 @@ def auto_discover_matches(force=False, skip_if_active_match=False):
     if discovered_any:
         save_schedule(schedule, automation_config)
         print("[+] Schedule saved after discovery.")
+
+    # ── Pre-resolve source shortcuts (L1→L2/L3) ────────────────────────
+    # Run during the discovery phase (all day) so by the time the active
+    # window opens, source URLs already point to deeper pages.
+    try:
+        now_utc = datetime.now(timezone.utc)
+        for match in schedule:
+            if match.get("status") in ("completed", "ended"):
+                continue
+            if match.get("_shortcuts_resolved"):
+                continue
+            sources = source_urls_for_match(match)
+            if not sources:
+                continue
+            # Only resolve for matches within the next 8 hours
+            try:
+                mt = parse_time(match["match_time"])
+                if mt - now_utc > timedelta(hours=8) or now_utc >= mt + timedelta(hours=3):
+                    continue
+            except Exception:
+                continue
+
+            resolved = resolve_source_shortcuts(sources)
+            # Add any new resolved URLs as additional sources
+            new_urls = [u for u in resolved if u not in sources]
+            if new_urls:
+                added = 0
+                for new_url in new_urls:
+                    if append_source_to_match(match, new_url, max_sources, score=2):
+                        added += 1
+                if added:
+                    print(f"[⚡] Added {added} pre-resolved L2/L3 source(s) for {match.get('match_name')}")
+                    save_schedule(schedule, automation_config)
+            match["_shortcuts_resolved"] = True
+    except Exception as e:
+        print(f"[-] Source shortcut pre-resolution failed (non-fatal): {e}")
 
 def check_and_run():
     # Sync fixtures first if API is enabled
