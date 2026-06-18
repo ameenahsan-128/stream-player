@@ -446,6 +446,48 @@ def read_links_html(match_name, config=None):
     return html
 
 
+def write_pregenerated_links(match_name, post_url, config=None, link_count=4):
+    """Generate generic portal link buttons before the deep scrape completes.
+
+    Creates N styled buttons (Link 1 - HD, Link 2 - HD, ...) that point to
+    ``post_url?link=N`` so users can navigate to the player page immediately
+    when the active window opens.  The portal is updated again with real
+    metadata after the scrape finishes.
+    """
+    import time as _time
+    html_lines = []
+    html_lines.append('<div style="font-family:\'Segoe UI\',Roboto,Helvetica,sans-serif; max-width:650px; margin: 20px auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 10px;">')
+    html_lines.append('  <style>')
+    html_lines.append('    .stream-btn { display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; max-width:550px; margin-bottom:15px; padding:16px 24px; background:linear-gradient(135deg,#e63946 0%,#b81d24 100%); color:#fff; text-decoration:none; border-radius:12px; border:1px solid #ff4d5a; box-shadow:0 4px 15px rgba(230,57,70,0.3); box-sizing:border-box; transition:all .3s cubic-bezier(.25,.8,.25,1); cursor:pointer; }')
+    html_lines.append('    .stream-btn:hover { background:linear-gradient(135deg,#ff4d5a 0%,#e63946 100%); border-color:#ff808b; transform:translateY(-2px); box-shadow:0 8px 25px rgba(230,57,70,0.5); }')
+    html_lines.append('    .stream-btn:active { transform:translateY(1px); box-shadow:0 2px 10px rgba(230,57,70,0.3); }')
+    html_lines.append('    .stream-title { font-size:16px; font-weight:700; letter-spacing:.5px; margin-bottom:6px; text-transform:uppercase; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.2); text-align:center; }')
+    html_lines.append('    .stream-subtitle { font-size:13px; font-weight:600; color:#00ff88; letter-spacing:.5px; text-transform:uppercase; text-align:center; }')
+    html_lines.append('  </style>')
+
+    cb = int(_time.time())
+    for idx in range(1, link_count + 1):
+        direct_url = f"{post_url}?link={idx}&cb={cb}"
+        title = f"{match_name} — Link {idx}"
+        subtitle = "HD · Embed · ENG"
+        html_lines.append(f'  <a class="stream-btn" href="{direct_url}" target="_blank">')
+        html_lines.append(f'    <span class="stream-title">{title}</span>')
+        html_lines.append(f'    <span class="stream-subtitle">{subtitle}</span>')
+        html_lines.append(f'  </a>')
+
+    html_lines.append('</div>')
+    html_content = "\n".join(html_lines)
+
+    # Write to links dir so portal update can read it
+    paths = ensure_runtime_dirs(config or load_automation_config())
+    os.makedirs(paths["links_dir"], exist_ok=True)
+    safe_name = slugify_match_name(match_name)
+    with open(os.path.join(paths["links_dir"], f"links_{safe_name}.html"), "w", encoding="utf-8") as f:
+        f.write(html_content)
+    print(f"[+] Pre-generated {link_count} generic portal links for {match_name}")
+    return html_content
+
+
 def active_window(match, scheduler_config):
     match_time = parse_time(match["match_time"])
     start_offset = int(scheduler_config.get("active_window_start_minutes", 15))
@@ -1471,6 +1513,82 @@ def check_and_run():
                 os.makedirs(paths["players_dir"], exist_ok=True)
                 temp_output = os.path.join(paths["players_dir"], f"player_{slugify_match_name(match['match_name'])}.html")
                 
+                # ── Phase 1: Pre-generate with cached links ─────────────────
+                # On the very first run (no existing player), reuse stream
+                # links from the most recent match so the portal has clickable
+                # buttons immediately — before the deep scrape finishes.
+                is_first_run = not os.path.exists(temp_output) and not match.get("_pregen_done")
+                if is_first_run:
+                    try:
+                        # Find the most recent player file from any other match
+                        cached_player_html = None
+                        player_dir = paths["players_dir"]
+                        candidates = sorted(
+                            [f for f in os.listdir(player_dir) if f.startswith("player_") and f.endswith(".html")],
+                            key=lambda f: os.path.getmtime(os.path.join(player_dir, f)),
+                            reverse=True,
+                        )
+                        for cand in candidates:
+                            cand_path = os.path.join(player_dir, cand)
+                            if cand_path == temp_output:
+                                continue  # skip self
+                            with open(cand_path, "r", encoding="utf-8") as cf:
+                                cached_html = cf.read()
+                            cached_links = extract_stream_links(cached_html)
+                            if cached_links:
+                                cached_player_html = cached_html
+                                print(f"[+] Phase 1: Reusing {len(cached_links)} cached links from {cand}")
+                                break
+
+                        if cached_player_html:
+                            # Write the cached player HTML as this match's player
+                            with open(temp_output, "w", encoding="utf-8") as pf:
+                                pf.write(cached_player_html)
+                            print(f"[+] Phase 1: Pre-populated player file: {temp_output}")
+
+                            # Upload the cached player to Blogger immediately
+                            pregen_post_url = None
+                            if has_player_oauth:
+                                try:
+                                    token = get_access_token(config)
+                                    dedicated_post_id = dedicated_player_post_id(match, player_slots)
+                                    if dedicated_post_id:
+                                        post_title = match["match_name"] + " Live Stream"
+                                        pregen_post_url = update_blogger_post(config, token, dedicated_post_id, post_title, cached_player_html)
+                                        match["blogger_post_id"] = dedicated_post_id
+                                        match["blogger_post_url"] = pregen_post_url
+                                        match["player_slot_url"] = pregen_post_url
+                                        print(f"[+] Phase 1: Player page uploaded (cached): {pregen_post_url}")
+                                    else:
+                                        if config.get("create_dedicated_player_posts", True):
+                                            post_title = match["match_name"] + " Live Stream"
+                                            post_id, pregen_post_url = create_blogger_post(config, token, post_title, cached_player_html)
+                                            match["blogger_post_id"] = post_id
+                                            match["blogger_post_url"] = pregen_post_url
+                                            match["player_slot_url"] = pregen_post_url
+                                            print(f"[+] Phase 1: Player post created (cached): {pregen_post_url}")
+                                except Exception as e:
+                                    print(f"[-] Phase 1: Player upload failed (will retry after scrape): {e}")
+
+                            # Publish pre-generated portal links immediately
+                            pregen_post_url = pregen_post_url or match.get("blogger_post_url") or match.get("player_slot_url")
+                            if pregen_post_url and portal_updates_enabled:
+                                try:
+                                    links_html = write_pregenerated_links(match["match_name"], pregen_post_url, automation_config)
+                                    new_token = get_access_token(new_config)
+                                    portal_url = update_portal_match_page(automation_config, new_config, new_token, match, "live", links_html=links_html)
+                                    match["new_blog_iframe_set"] = True
+                                    match["new_blog_prepare_set"] = False
+                                    print(f"[+] Phase 1: Portal updated with pre-generated links: {portal_url}")
+                                except Exception as e:
+                                    print(f"[-] Phase 1: Portal pre-generation failed: {e}")
+
+                            match["_pregen_done"] = True
+                            save_schedule(schedule, automation_config)
+                    except Exception as e:
+                        print(f"[-] Phase 1 pre-generation failed (non-fatal): {e}")
+
+                # ── Phase 2: Deep scrape ────────────────────────────────────
                 # Step 1: Run generate_player.py to crawl and produce player file
                 sources = source_urls_for_match(match)
                 # Sanitize source URLs: remove malformed, wrong-match, and generic content pages
