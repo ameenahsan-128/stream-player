@@ -1657,25 +1657,58 @@ def check_and_run():
                 is_first_run = not os.path.exists(temp_output) and not match.get("_pregen_done")
                 if is_first_run:
                     try:
-                        # Find the most recent player file from any other match
+                        # Find the player from the most recently played match.
+                        # That match's stream links have the highest probability
+                        # of still working because portals reuse the same embeds.
                         cached_player_html = None
                         player_dir = paths["players_dir"]
-                        candidates = sorted(
-                            [f for f in os.listdir(player_dir) if f.startswith("player_") and f.endswith(".html")],
-                            key=lambda f: os.path.getmtime(os.path.join(player_dir, f)),
-                            reverse=True,
-                        )
-                        for cand in candidates:
-                            cand_path = os.path.join(player_dir, cand)
-                            if cand_path == temp_output:
-                                continue  # skip self
-                            with open(cand_path, "r", encoding="utf-8") as cf:
+
+                        # Build list of other matches sorted by match_time descending
+                        # (most recently played first → freshest links)
+                        other_matches = []
+                        for other in schedule:
+                            if other is match:
+                                continue
+                            try:
+                                other_time = parse_time(other["match_time"])
+                                if other_time <= now:  # only consider past/ongoing matches
+                                    other_matches.append((other_time, other))
+                            except Exception:
+                                pass
+                        other_matches.sort(key=lambda x: x[0], reverse=True)
+
+                        for other_time, other in other_matches:
+                            other_slug = slugify_match_name(other.get("match_name", ""))
+                            other_path = os.path.join(player_dir, f"player_{other_slug}.html")
+                            if not os.path.exists(other_path):
+                                continue
+                            with open(other_path, "r", encoding="utf-8") as cf:
                                 cached_html = cf.read()
                             cached_links = extract_stream_links(cached_html)
                             if cached_links:
                                 cached_player_html = cached_html
-                                print(f"[+] Phase 1: Reusing {len(cached_links)} cached links from {cand}")
+                                age_mins = int((now - other_time).total_seconds() / 60)
+                                print(f"[+] Phase 1: Reusing {len(cached_links)} cached links from {other.get('match_name')} (played {age_mins}m ago)")
                                 break
+
+                        # Fallback: if no schedule-matched player found, try any player file
+                        if not cached_player_html:
+                            files = sorted(
+                                [f for f in os.listdir(player_dir) if f.startswith("player_") and f.endswith(".html")],
+                                key=lambda f: os.path.getmtime(os.path.join(player_dir, f)),
+                                reverse=True,
+                            )
+                            for cand in files:
+                                cand_path = os.path.join(player_dir, cand)
+                                if cand_path == temp_output:
+                                    continue
+                                with open(cand_path, "r", encoding="utf-8") as cf:
+                                    cached_html = cf.read()
+                                cached_links = extract_stream_links(cached_html)
+                                if cached_links:
+                                    cached_player_html = cached_html
+                                    print(f"[+] Phase 1: Fallback — reusing {len(cached_links)} cached links from {cand}")
+                                    break
 
                         if cached_player_html:
                             # Write the cached player HTML as this match's player
