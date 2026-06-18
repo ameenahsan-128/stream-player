@@ -2568,7 +2568,24 @@ def analyze_page(url, html, visited):
         block = extract_js_object_containing(html, id_val)
         if block:
             search_html = block
-            
+
+    # ── Hello Sports / lordatomic obfuscated player decoder ──
+    # These embeds use a 3-layer encoding: hex → base64 → URL-encode
+    # to hide a Shaka Player DASH stream URL + ClearKey DRM pair.
+    # Detect the pattern and decode it so existing extractors can find the stream.
+    hellosport_hex = re.search(r"'(4a5449[0-9a-fA-F]{500,})'", search_html)
+    if hellosport_hex:
+        try:
+            import urllib.parse as _ulp
+            _hs_stage1 = bytes.fromhex(hellosport_hex.group(1)).decode("utf-8", errors="replace")
+            _hs_stage2 = base64.b64decode(_hs_stage1).decode("utf-8", errors="replace")
+            _hs_decoded = _ulp.unquote(_hs_stage2)
+            if ".mpd" in _hs_decoded or "clearKey" in _hs_decoded:
+                search_html += "\n" + _hs_decoded
+                print(f"[+] Decoded HelloSports obfuscated player ({len(_hs_decoded)} chars)")
+        except Exception as _hs_err:
+            print(f"[-] HelloSports decode failed: {_hs_err}", file=sys.stderr)
+
     m3u8_links = re.findall(r"[\x27\"](https?://[^\x27\"]+\.m3u8[^\x27\"]*)[\x27\"]", search_html, re.IGNORECASE)
     mpd_links = re.findall(r"[\x27\"](https?://[^\x27\"]+\.mpd[^\x27\"]*)[\x27\"]", search_html, re.IGNORECASE)
     
@@ -2585,6 +2602,15 @@ def analyze_page(url, html, visited):
         stream_info["clear_keys"] = {ck_match.group(1): ck_match.group(2)}
         stream_info["player"] = "shaka"
         stream_info["type"] = "dash"
+
+    # Fallback: separate keyId / key variables (Hello Sports pattern)
+    if not stream_info.get("clear_keys"):
+        kid_match = re.search(r'(?:const|var|let)\s+keyId\s*=\s*[\x27"]([0-9a-fA-F]{32})[\x27"]', search_html)
+        key_match = re.search(r'(?:const|var|let)\s+key\b\s*=\s*[\x27"]([0-9a-fA-F]{32})[\x27"]', search_html)
+        if kid_match and key_match:
+            stream_info["clear_keys"] = {kid_match.group(1): key_match.group(1)}
+            stream_info["player"] = "shaka"
+            stream_info["type"] = "dash"
         
     jw_match = re.search(r"jwplayer\(.*?\)\.setup\(\{(.*?)\}\)", search_html, re.DOTALL | re.IGNORECASE)
     if jw_match:
@@ -2675,7 +2701,7 @@ def analyze_page(url, html, visited):
                     
     return stream_info
 
-def crawl_url_recursive(url, depth=0, max_depth=2, visited=None, headers=None, domain_health=None):
+def crawl_url_recursive(url, depth=0, max_depth=4, visited=None, headers=None, domain_health=None):
     if visited is None:
         visited = set()
     if headers is None:
@@ -2690,7 +2716,7 @@ def crawl_url_recursive(url, depth=0, max_depth=2, visited=None, headers=None, d
     if depth > max_depth:
         return None
         
-    use_browser = should_use_browser(url) and depth == 0  # Only use browser at top level
+    use_browser = should_use_browser(url) and depth <= 1  # Use browser at L0 and L1 portal pages
     method_label = "browser" if use_browser else "requests"
     print(f"{'  ' * depth}[*] Crawling page ({method_label}): {url}")
 
@@ -3418,7 +3444,7 @@ def probe_stream_url(url, stream_type, clear_keys=None):
 def is_stream_url_working(url, stream_type):
     return probe_stream_url(url, stream_type).get("working", False)
 
-def process_root_url(root_url, max_depth=2, domain_health=None):
+def process_root_url(root_url, max_depth=4, domain_health=None):
     if domain_health is None:
         domain_health = {}
 
@@ -3491,7 +3517,7 @@ def main():
     parser.add_argument(
         "-d", "--depth",
         type=int,
-        default=2,
+        default=4,
         help="Maximum recursion depth for following iframes/redirects (default: 2)."
     )
     parser.add_argument(
@@ -3826,8 +3852,14 @@ def main():
 
                 # Check if the stream link is responsive/playable and collect ranking data.
                 probe = probe_stream_url(playback_url, s_type, clear_keys=clear_keys_for_probe)
+
+                # If inner (extracted) URL failed but original is a wrapper iframe,
+                # fall back to the original iframe URL — it handles auth client-side.
                 if not probe.get("working") and playback_url != original_stream_url:
-                    print(f"[-] Skipping wrapper iframe because embedded target failed: {original_stream_url} -> {playback_url} ({probe.get('validation_reason') or probe.get('error')})")
+                    print(f"[*] Embedded target failed ({probe.get('validation_reason') or probe.get('error')}), falling back to iframe: {original_stream_url[:80]}")
+                    playback_url = original_stream_url
+                    s_type = "iframe"
+                    probe = probe_stream_url(playback_url, s_type)
 
                 if not probe.get("working"):
                     print(f"[-] Skipping dead/unresponsive stream URL: {playback_url} ({probe.get('validation_reason') or probe.get('error')})")

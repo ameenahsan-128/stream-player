@@ -8,6 +8,47 @@ import math
 from datetime import datetime, timedelta, timezone
 import re
 
+# Global rate-limit state: once a 429 "daily quota" error is hit, skip all
+# further API calls for this process lifetime to avoid burning quota.
+_rate_limit_until = 0  # epoch timestamp; skip API calls while time.time() < this
+_DAILY_QUOTA_BACKOFF_SECONDS = 300  # 5 min backoff on daily quota exhaustion
+_PER_MINUTE_BACKOFF_SECONDS = 30    # 30s backoff on per-minute rate limit
+
+
+class BloggerRateLimitError(Exception):
+    """Raised when the Blogger API returns 429 Too Many Requests."""
+    def __init__(self, message, is_daily=False):
+        super().__init__(message)
+        self.is_daily = is_daily
+
+
+def _check_rate_limit():
+    """Raise if we are in a rate-limit cooldown period."""
+    if time.time() < _rate_limit_until:
+        remaining = int(_rate_limit_until - time.time())
+        raise BloggerRateLimitError(
+            f"Blogger API rate-limited; skipping call ({remaining}s remaining in cooldown)",
+            is_daily=True,
+        )
+
+
+def _handle_response(response):
+    """Check for 429 and set global backoff before raising."""
+    global _rate_limit_until
+    if response.status_code == 429:
+        body = response.text or ""
+        is_daily = "per day" in body.lower()
+        backoff = _DAILY_QUOTA_BACKOFF_SECONDS if is_daily else _PER_MINUTE_BACKOFF_SECONDS
+        _rate_limit_until = time.time() + backoff
+        kind = "daily quota" if is_daily else "per-minute rate limit"
+        print(f"[!] Blogger API 429: {kind} exceeded — backing off {backoff}s")
+        raise BloggerRateLimitError(
+            f"429 Too Many Requests ({kind}): {response.text[:200]}",
+            is_daily=is_daily,
+        )
+    response.raise_for_status()
+
+
 from automation_config import get_fixture_api_config, get_portal_blog_config, get_scheduler_config, has_oauth, load_automation_config
 from fixture_manager import schedule_match_allowed
 from lineup_manager import refresh_lineups_for_match
@@ -119,6 +160,7 @@ def get_access_token(config):
     return response.json().get("access_token")
 
 def create_blogger_post(config, access_token, title, html_content, published=None):
+    _check_rate_limit()
     blog_id = config.get("blog_id")
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/"
     headers = {
@@ -134,7 +176,7 @@ def create_blogger_post(config, access_token, title, html_content, published=Non
     if published:
         payload["published"] = published
     response = requests.post(url, headers=headers, json=payload, timeout=20)
-    response.raise_for_status()
+    _handle_response(response)
     res_data = response.json()
     return res_data.get("id"), res_data.get("url")
 
@@ -152,12 +194,15 @@ def preserve_existing_post_thumbnail(config, access_token, post_id, html_content
     if html_has_image(html_content):
         return html_content
 
+    _check_rate_limit()
     blog_id = config.get("blog_id")
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
         response = requests.get(url, headers=headers, params={"fields": "content"}, timeout=20)
-        response.raise_for_status()
+        _handle_response(response)
+    except BloggerRateLimitError:
+        raise  # Let the caller see the rate limit so it can skip further calls
     except Exception as e:
         print(f"[!] Existing preview thumbnail lookup failed; continuing without preserve: {e}")
         return html_content
@@ -178,6 +223,7 @@ def preserve_existing_post_thumbnail(config, access_token, post_id, html_content
 
 
 def update_blogger_post(config, access_token, post_id, title, html_content, published=None, preserve_existing_thumbnail=False):
+    _check_rate_limit()
     blog_id = config.get("blog_id")
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
     headers = {
@@ -196,10 +242,11 @@ def update_blogger_post(config, access_token, post_id, title, html_content, publ
     if published:
         payload["published"] = published
     response = requests.patch(url, headers=headers, json=payload, timeout=20)
-    response.raise_for_status()
+    _handle_response(response)
     return response.json().get("url")
 
 def create_blogger_page(config, access_token, title, html_content):
+    _check_rate_limit()
     blog_id = config.get("blog_id")
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/pages"
     headers = {
@@ -213,7 +260,7 @@ def create_blogger_page(config, access_token, title, html_content):
         "content": html_content
     }
     response = requests.post(url, headers=headers, json=payload, timeout=20)
-    response.raise_for_status()
+    _handle_response(response)
     res_data = response.json()
     return res_data.get("id"), res_data.get("url")
 
@@ -228,6 +275,7 @@ def create_stream_blogger_page(config, access_token, match, title, html_content)
     return page_id, patched_url or page_url
 
 def update_blogger_page(config, access_token, page_id, title, html_content):
+    _check_rate_limit()
     blog_id = config.get("blog_id")
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/pages/{page_id}"
     headers = {
@@ -242,7 +290,7 @@ def update_blogger_page(config, access_token, page_id, title, html_content):
         "content": html_content
     }
     response = requests.patch(url, headers=headers, json=payload, timeout=20)
-    response.raise_for_status()
+    _handle_response(response)
     return response.json().get("url")
 
 

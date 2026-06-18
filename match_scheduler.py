@@ -1661,21 +1661,33 @@ def check_and_run():
             print(f"[*] Match active window ended: {match['match_name']}")
             portal_updates_enabled = has_new_oauth and not is_manual_portal_match(match)
             metadata_changed = False
+            # Track whether the result just transitioned to "final" in this run
+            was_final_before = result_is_final(match)
             try:
+                # Use score_only=True and respect cooldown intervals to avoid
+                # hammering the API every minute.  force=True was causing
+                # metadata_changed to always be True (timestamp update), which
+                # cascaded into redundant portal/post updates that exhausted
+                # the daily Blogger API quota.
                 metadata_changed = refresh_match_metadata(
                     match,
                     scheduler_config,
                     now,
-                    active=True,
-                    force=True,
-                    score_only=False,
+                    active=False,
+                    force=False,
+                    score_only=True,
                 )
                 if metadata_changed:
                     print(f"[*] Final metadata checked/updated for: {match['match_name']}")
             except Exception as e:
                 print(f"[-] Final metadata refresh failed: {e}")
 
-            if portal_updates_enabled and (metadata_changed or not match.get("new_blog_ended_set")):
+            newly_final = result_is_final(match) and not was_final_before
+
+            # Only update portal page when first entering ended state, or when
+            # the result just became final (to show the final score).  Previously
+            # this fired on every metadata_changed which was always True.
+            if portal_updates_enabled and (not match.get("new_blog_ended_set") or newly_final):
                 try:
                     new_token = get_access_token(new_config)
                     update_portal_match_page(automation_config, new_config, new_token, match, "ended")
@@ -1686,7 +1698,10 @@ def check_and_run():
                     print(f"[-] Portal ended-state update failed: {e}")
 
             post_id = str(match.get("new_blogger_post_id") or "").strip()
-            if portal_updates_enabled and post_id and (metadata_changed or result_is_final(match) or not match.get("new_blog_post_put_down")):
+            # Only refresh the preview post when it hasn't been put down yet,
+            # or when the result just transitioned to final (to embed the score).
+            needs_post_update = not match.get("new_blog_post_put_down") or newly_final
+            if portal_updates_enabled and post_id and needs_post_update:
                 try:
                     new_token = get_access_token(new_config)
                     render_match = with_thumbnail_src(automation_config, new_config, match)
