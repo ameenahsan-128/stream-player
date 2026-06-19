@@ -1630,6 +1630,7 @@ def check_and_run():
                                     post_id,
                                     preview_post_title(render_match, new_config),
                                     post_html,
+                                    published=match["match_time"],
                                     preserve_existing_thumbnail=True,
                                 )
                                 match["new_blogger_post_url"] = post_url
