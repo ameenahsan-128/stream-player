@@ -1556,10 +1556,13 @@ def check_and_run():
 
     # Fast source prediction: instantly generate + verify URLs from known patterns
     # Runs in ~5s vs 60-90s for portal scanning — fills gaps for matches with few sources
-    try:
-        run_source_prediction(schedule, scheduler_config, automation_config)
-    except Exception as e:
-        print(f"[-] Source prediction error (non-fatal): {e}")
+    if scheduler_config.get("prediction_enabled", True):
+        try:
+            run_source_prediction(schedule, scheduler_config, automation_config)
+        except Exception as e:
+            print(f"[-] Source prediction error (non-fatal): {e}")
+    else:
+        print("[*] Source prediction is disabled via configuration.")
 
     for match in schedule:
         status = match.get("status", "pending")
