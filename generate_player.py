@@ -2481,16 +2481,24 @@ def extract_root_links(root_url, headers=None):
     parser.feed(response.text)
     
     matched_links = []
+    seen_urls = set()
     for item in parser.results:
         text = item["text"]
         link_url = item["url"]
-        
+
         if is_likely_stream_button(text, link_url, root_url) and item["tag"] in ("a", "button"):
-            matched_links.append({
-                "label": text,
-                "url": link_url
-            })
-            
+            if link_url not in seen_urls:
+                matched_links.append({"label": text, "url": link_url})
+                seen_urls.add(link_url)
+
+        elif item["tag"] == "iframe":
+            # Root page has a direct iframe embed — treat it as a stream candidate
+            if link_url and not is_junk_iframe(link_url) and link_url not in seen_urls:
+                label = text.strip() or f"Stream {len(matched_links) + 1}"
+                matched_links.append({"label": label, "url": link_url})
+                seen_urls.add(link_url)
+                print(f"  [iframe] Root-level direct embed: {link_url[:80]}")
+
     return matched_links
 
 def analyze_page(url, html, visited):

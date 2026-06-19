@@ -9,3 +9,8 @@ PYTHONDONTWRITEBYTECODE=1
 45 18 * * * cd /home/expertz/stream && /usr/bin/python3 precreate_posts.py --refresh-existing --within-hours 72 >> data/precreate.log 2>&1
 0 */6 * * * cd /home/expertz/stream && /usr/bin/python3 precreate_posts.py --refresh-existing --within-hours 72 >> data/precreate.log 2>&1
 # stream-pipeline-end
+
+# daily-blog-start
+# Post one high-quality football news blog daily at 07:30 UTC (1:00 PM IST)
+30 7 * * * cd /home/expertz/stream && /usr/bin/python3 daily_blog_poster.py >> data/daily_blog.log 2>&1
+# daily-blog-end
