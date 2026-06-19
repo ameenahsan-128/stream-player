@@ -1065,7 +1065,14 @@ def match_in_precreate_scope(match, target_ist_date, within_hours, now):
 def preview_publish_overrides(schedule, target_ist_date, within_hours, now, enabled=True):
     if not enabled:
         return {}
-    scoped = []
+    
+    # We use a stable mapping to ensure posts ALWAYS stay in kickoff order,
+    # regardless of when this script runs. We want earlier kickoffs to be
+    # "newer" (larger published date). So we reflect the kickoff time across
+    # a base date in the past.
+    base_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    
+    overrides = {}
     for match in schedule:
         if not match_in_precreate_scope(match, target_ist_date, within_hours, now):
             continue
@@ -1073,12 +1080,14 @@ def preview_publish_overrides(schedule, target_ist_date, within_hours, now, enab
             kickoff = parse_match_time(match["match_time"])
         except Exception:
             kickoff = now + timedelta(days=365)
-        scoped.append((kickoff, match_key(match), match))
-    scoped.sort(key=lambda item: (item[0], item[1]))
-    return {
-        key: (now - timedelta(minutes=idx)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        for idx, (_kickoff, key, _match) in enumerate(scoped)
-    }
+        
+        # Reflect across base_date: earlier kickoff -> smaller delta -> larger published date
+        delta = kickoff - base_date
+        published_dt = base_date - delta
+        
+        overrides[match_key(match)] = published_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        
+    return overrides
 
 
 def main():

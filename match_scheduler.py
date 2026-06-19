@@ -213,7 +213,7 @@ def update_blogger_post(config, access_token, post_id, title, html_content, publ
     response.raise_for_status()
     return response.json().get("url")
 
-def create_blogger_post(config, access_token, title, html_content):
+def create_blogger_post(config, access_token, title, html_content, published=None):
     blog_id = config.get("blog_id")
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/"
     headers = {
@@ -226,6 +226,8 @@ def create_blogger_post(config, access_token, title, html_content):
         "title": title,
         "content": html_content
     }
+    if published:
+        payload["published"] = published
     response = requests.post(url, headers=headers, json=payload, timeout=20)
     response.raise_for_status()
     res_data = response.json()
@@ -1630,7 +1632,6 @@ def check_and_run():
                                     post_id,
                                     preview_post_title(render_match, new_config),
                                     post_html,
-                                    published=match["match_time"],
                                     preserve_existing_thumbnail=True,
                                 )
                                 match["new_blogger_post_url"] = post_url
@@ -1996,8 +1997,7 @@ def check_and_run():
                     render_match = with_thumbnail_src(automation_config, new_config, match)
                     post_html = render_preview_post(new_config, render_match)
                     try:
-                        kickoff = parse_match_time(match["match_time"])
-                        published_dt = (kickoff - timedelta(days=30)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                        published_dt = "2000-01-01T00:00:00Z"
                     except Exception:
                         published_dt = None
                     post_url = update_blogger_post(
@@ -2024,8 +2024,7 @@ def check_and_run():
                     post_title = match["match_name"] + " Live Stream"
                     empty_html = render_player_html("const STREAM_LINKS = [];")
                     try:
-                        kickoff = parse_match_time(match["match_time"])
-                        published_dt = (kickoff - timedelta(days=30)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                        published_dt = "2000-01-01T00:00:00Z"
                     except Exception:
                         published_dt = None
                     update_blogger_post(
