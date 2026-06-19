@@ -2674,7 +2674,7 @@ def analyze_page(url, html, visited):
             })
             
     for item in parser.results:
-        if item["tag"] == "a":
+        if item["tag"] in ("a", "button"):
             text = item["text"]
             link_url = item["url"]
             if is_likely_stream_button(text, link_url, url) and link_url not in visited and link_url != url:
