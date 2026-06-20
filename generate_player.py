@@ -1138,8 +1138,8 @@ function sortAndRebuildLinks() {
   const activeId = STREAM_LINKS[activeIndex] ? STREAM_LINKS[activeIndex].id : null;
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) || (navigator.userAgent.includes('Macintosh') && 'ontouchend' in document);
   const typePriority = isIOS
-    ? { hls: 0, native: 1, iframe: 2, dash: 3 }
-    : { dash: 0, hls: 1, native: 2, iframe: 3 };
+    ? { iframe: 0, hls: 1, native: 2, dash: 3 }
+    : { iframe: 0, dash: 1, hls: 2, native: 3 };
   const priorityOf = (lnk) => typePriority[lnk.type] ?? 4;
   
   STREAM_LINKS.sort((a, b) => {
@@ -2945,7 +2945,7 @@ def parse_manifest_quality(text, stream_type):
     return quality
 
 
-def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, status_code=None, url=None):
+def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, status_code=None, url=None, domain_health=None):
     base = {
         "dash": 360,
         "hls": 320,
@@ -2980,6 +2980,23 @@ def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, sta
         # Heavy penalty for Amazon Prime Video live streams which are notoriously geoblocked/unstable for general public
         if any(p in url_lower for p in ["pv-cdn.net", "aiv-cdn.net", "aiv-delivery.net"]):
             base -= 250
+
+        # Apply domain health history penalty
+        if domain_health:
+            domain = urlparse(url).netloc
+            if domain:
+                entry = domain_health.get(domain) or domain_health.get(domain.replace("www.", ""))
+                if entry:
+                    fails = entry.get("fail_count", 0)
+                    successes = entry.get("success_count", 0)
+                    total = fails + successes
+                    if total >= 5:
+                        fail_rate = fails / total
+                        # Subtract up to 150 points for bad domains
+                        penalty = int(fail_rate * 150)
+                        if penalty > 0:
+                            base -= penalty
+                            print(f"[Health Penalty] Domain {domain} has fail rate {fail_rate:.1%} (fails: {fails}, total: {total}). Applied -{penalty} penalty. New score: {base}")
 
     return base
 
@@ -3259,7 +3276,7 @@ def probe_dash_init_segment(manifest_url, manifest_bytes, headers):
     return True, "dash-init-ok", status_code
 
 
-def probe_stream_url(url, stream_type, clear_keys=None):
+def probe_stream_url(url, stream_type, clear_keys=None, domain_health=None):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://qtwc2022.blogspot.com/",
@@ -3444,6 +3461,7 @@ def probe_stream_url(url, stream_type, clear_keys=None):
             bandwidth=result["bandwidth"],
             status_code=result["status_code"],
             url=url,
+            domain_health=domain_health,
         )
         if result["backup"]:
             result["score"] -= 180
@@ -3868,7 +3886,7 @@ def main():
                 clear_keys_for_probe = details["clear_keys"] if s_type == "dash" else {}
 
                 # Check if the stream link is responsive/playable and collect ranking data.
-                probe = probe_stream_url(playback_url, s_type, clear_keys=clear_keys_for_probe)
+                probe = probe_stream_url(playback_url, s_type, clear_keys=clear_keys_for_probe, domain_health=domain_health)
 
                 # If inner (extracted) URL failed but original is a wrapper iframe,
                 # fall back to the original iframe URL — it handles auth client-side.
@@ -3876,7 +3894,7 @@ def main():
                     print(f"[*] Embedded target failed ({probe.get('validation_reason') or probe.get('error')}), falling back to iframe: {original_stream_url[:80]}")
                     playback_url = original_stream_url
                     s_type = "iframe"
-                    probe = probe_stream_url(playback_url, s_type)
+                    probe = probe_stream_url(playback_url, s_type, domain_health=domain_health)
 
                 if not probe.get("working"):
                     print(f"[-] Skipping dead/unresponsive stream URL: {playback_url} ({probe.get('validation_reason') or probe.get('error')})")
