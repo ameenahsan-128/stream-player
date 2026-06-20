@@ -1137,10 +1137,6 @@ STREAM_LINKS.forEach((lnk, i) => {
 function sortAndRebuildLinks() {
   const activeId = STREAM_LINKS[activeIndex] ? STREAM_LINKS[activeIndex].id : null;
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) || (navigator.userAgent.includes('Macintosh') && 'ontouchend' in document);
-  const typePriority = isIOS
-    ? { iframe: 0, hls: 1, native: 2, dash: 3 }
-    : { iframe: 0, dash: 1, hls: 2, native: 3 };
-  const priorityOf = (lnk) => typePriority[lnk.type] ?? 4;
   
   STREAM_LINKS.sort((a, b) => {
     // 1. Prioritize active stream to the top so it is always visible
@@ -1160,13 +1156,26 @@ function sortAndRebuildLinks() {
       }
     }
 
-    // 3. Keep working candidates in playback priority order.
-    const typeDelta = priorityOf(a) - priorityOf(b);
-    if (typeDelta !== 0) return typeDelta;
-    
-    // 4. Put successful ones at the top within the same stream type
+    // 3. Put successful ones at the top within the same category
     if (a.success && !b.success) return -1;
     if (!a.success && b.success) return 1;
+
+    // 4. Compare by score descending, with custom client-side iOS adjustments
+    let scoreA = a.score || 0;
+    let scoreB = b.score || 0;
+    
+    if (isIOS) {
+      // Demote DASH heavily on iOS since Safari doesn't support it natively
+      if (a.type === 'dash') scoreA -= 200;
+      if (b.type === 'dash') scoreB -= 200;
+      // Promote HLS on iOS
+      if (a.type === 'hls') scoreA += 50;
+      if (b.type === 'hls') scoreB += 50;
+    }
+
+    if (scoreA !== scoreB) {
+      return scoreB - scoreA;
+    }
     
     // Keep original python priority
     return a.id - b.id;
@@ -2947,10 +2956,10 @@ def parse_manifest_quality(text, stream_type):
 
 def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, status_code=None, url=None, domain_health=None):
     base = {
+        "iframe": 380,
         "dash": 360,
-        "hls": 320,
+        "hls": 300,
         "native": 260,
-        "iframe": 190,
     }.get(stream_type, 120)
 
     if height:
@@ -3081,6 +3090,50 @@ def extract_embedded_stream_url(url, allow_iframe_candidate=True, _depth=0):
             if resolved and infer_stream_type_from_url(resolved) in ("hls", "dash", "native"):
                 return resolved
     return ""
+
+
+def get_origin_from_url(url):
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        pass
+    return "https://qtwc2022.blogspot.com"
+
+
+def is_generic_player_wrapper(url):
+    url_lower = url.lower()
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower()
+    path = parsed.path.lower()
+    
+    # Common domains for generic wrappers
+    generic_domains = [
+        "lordatomic.github.io",
+        "cinearena.fun",
+        "veotest.bbvplayline1a.com",
+    ]
+    if any(d in domain for d in generic_domains):
+        return True
+        
+    # Common path patterns for generic wrappers
+    generic_paths = [
+        "/plyr.html", "/video.html", "/player.html", "/embed.html", "/play.html", "/m3u8/"
+    ]
+    # Check if it has a query parameter containing a stream URL
+    has_stream_param = False
+    params = parse_qs(parsed.query)
+    for p_val_list in params.values():
+        for val in p_val_list:
+            if val.startswith(("http://", "https://")) and (".m3u8" in val or ".mpd" in val or ".mp4" in val):
+                has_stream_param = True
+                break
+                
+    if has_stream_param and any(p in path for p in generic_paths):
+        return True
+        
+    return False
 
 
 def response_cors_ok(response):
@@ -3276,11 +3329,11 @@ def probe_dash_init_segment(manifest_url, manifest_bytes, headers):
     return True, "dash-init-ok", status_code
 
 
-def probe_stream_url(url, stream_type, clear_keys=None, domain_health=None):
+def probe_stream_url(url, stream_type, clear_keys=None, domain_health=None, referer=None):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://qtwc2022.blogspot.com/",
-        "Origin": "https://qtwc2022.blogspot.com",
+        "Referer": referer or "https://qtwc2022.blogspot.com/",
+        "Origin": get_origin_from_url(referer) if referer else "https://qtwc2022.blogspot.com",
     }
     result = {
         "working": False,
@@ -3879,28 +3932,47 @@ def main():
                     playback_url = embedded_stream_url
                     s_type = infer_stream_type_from_url(playback_url)
 
-                if playback_url in seen_urls:
+                if playback_url in seen_urls or original_stream_url in seen_urls:
                     print(f"[-] Skipping duplicate stream URL for: {label_raw} (Stream {s_idx})")
                     continue
 
                 clear_keys_for_probe = details["clear_keys"] if s_type == "dash" else {}
 
                 # Check if the stream link is responsive/playable and collect ranking data.
-                probe = probe_stream_url(playback_url, s_type, clear_keys=clear_keys_for_probe, domain_health=domain_health)
+                # Pass original_stream_url as referer if we extracted an embedded URL, so the HLS probe is authorized.
+                probe_referer = original_stream_url if playback_url != original_stream_url else None
+                probe = probe_stream_url(
+                    playback_url,
+                    s_type,
+                    clear_keys=clear_keys_for_probe,
+                    domain_health=domain_health,
+                    referer=probe_referer
+                )
 
                 # If inner (extracted) URL failed but original is a wrapper iframe,
                 # fall back to the original iframe URL — it handles auth client-side.
+                # BUT do not fallback if the wrapper is generic/open-source player wrapper!
                 if not probe.get("working") and playback_url != original_stream_url:
-                    print(f"[*] Embedded target failed ({probe.get('validation_reason') or probe.get('error')}), falling back to iframe: {original_stream_url[:80]}")
-                    playback_url = original_stream_url
-                    s_type = "iframe"
-                    probe = probe_stream_url(playback_url, s_type, domain_health=domain_health)
+                    if is_generic_player_wrapper(original_stream_url):
+                        print(f"[-] Extracted stream failed and original is a generic player wrapper. Skipping fallback: {original_stream_url[:80]}")
+                        # Keep probe as failed so it gets skipped below
+                    else:
+                        print(f"[*] Embedded target failed ({probe.get('validation_reason') or probe.get('error')}), falling back to iframe: {original_stream_url[:80]}")
+                        playback_url = original_stream_url
+                        s_type = "iframe"
+                        probe = probe_stream_url(playback_url, s_type, domain_health=domain_health)
+
+                # Check duplicate status again after fallback
+                if playback_url in seen_urls:
+                    print(f"[-] Skipping duplicate stream URL after fallback for: {label_raw} (Stream {s_idx})")
+                    continue
 
                 if not probe.get("working"):
                     print(f"[-] Skipping dead/unresponsive stream URL: {playback_url} ({probe.get('validation_reason') or probe.get('error')})")
                     continue
 
                 seen_urls.add(playback_url)
+                seen_urls.add(original_stream_url)
                     
                 # Clear keys only for DASH
                 s_keys = details["clear_keys"] if s_type == "dash" else {}
