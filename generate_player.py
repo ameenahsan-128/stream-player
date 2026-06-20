@@ -1269,15 +1269,16 @@ let lastProgressTime = 0;
 let lastProgressPosition = 0;
 let preferredFailoverType = null;
 let lastHlsFailure = null;
-const STARTUP_TIMEOUT_MS = 8000;
-const STALL_TIMEOUT_MS = 6000;
-// HLS is prone to silent stalls: use shorter timeouts so we switch faster
-const HLS_MANIFEST_TIMEOUT_MS = 10000;  // reduced from 12s
-const HLS_PLAYBACK_TIMEOUT_MS = 12000;  // reduced from 30s — HLS either starts quickly or not at all
-const HLS_STALL_TIMEOUT_MS = 8000;      // reduced from 15s — detect HLS stalls sooner
-const HLS_MAX_NETWORK_RECOVERIES = 2;
-const HLS_MAX_MEDIA_RECOVERIES = 2;
-const HLS_LOAD_ERROR_FAILOVER_LIMIT = 1;  // reduced from 2 — one load error = switch HLS link
+const STARTUP_TIMEOUT_MS = 15000;
+const STALL_TIMEOUT_MS = 15000;
+// HLS is prone to silent stalls: use longer timeouts to prevent aggressive link switching
+const HLS_MANIFEST_TIMEOUT_MS = 15000;
+const HLS_PLAYBACK_TIMEOUT_MS = 20000;
+const HLS_STALL_TIMEOUT_MS = 15000;
+const HLS_MAX_NETWORK_RECOVERIES = 4;
+const HLS_MAX_MEDIA_RECOVERIES = 4;
+const HLS_LOAD_ERROR_FAILOVER_LIMIT = 3;
+
 
 /* ═══════════════════════════════════════════════════════════════
    ENGINE BADGE UI
@@ -1424,6 +1425,10 @@ function startStallWatchdog(attemptId, message, timeoutMs) {
   clearTimeout(stallWatchdog);
   stallWatchdog = setTimeout(() => {
     if (attemptId !== playbackAttemptId || !playbackStarted || vwrap.classList.contains('iframe-mode')) return;
+    if (video.paused) {
+      lastProgressTime = Date.now();
+      return;
+    }
     if (Date.now() - lastProgressTime >= waitMs) {
       failCurrentLink(message || 'Playback stalled. Trying next link...');
     }
@@ -1675,6 +1680,10 @@ function loadHLS(url, onSuccess, onFail) {
     hlsSegmentHealthTimer = setInterval(() => {
       if (attemptId !== playbackAttemptId) { clearInterval(hlsSegmentHealthTimer); return; }
       if (!playbackStarted) return;
+      if (video.paused) {
+        lastProgressTime = Date.now();
+        return;
+      }
       if (Date.now() - lastProgressTime > HLS_STALL_TIMEOUT_MS) {
         clearInterval(hlsSegmentHealthTimer);
         failCurrentLink('HLS segment health check failed — stream stalled. Switching...');
@@ -1952,7 +1961,7 @@ function isLive() {
 
 video.addEventListener('timeupdate', () => {
   const currentPosition = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-  if (currentPosition > lastProgressPosition + 0.25) {
+  if (Math.abs(currentPosition - lastProgressPosition) > 0.01) {
     markPlaybackHealthy();
   }
   if (isLive()) {
@@ -3938,19 +3947,19 @@ def main():
                     "score": probe.get("score", 0)
                 })
 
-        # Sort by playback policy first: all working DASH links, then HLS, native, iframe.
-        # Probe score is only used within the same type so HLS/iframe cannot outrank DASH.
+        # Sort by playback policy: prioritize stable iframe (embed) and dash streams first
+        # to prevent HLS auto-switching issues in the top links.
         def get_type_priority(item):
             if (item.get("probe") or {}).get("backup"):
                 return 5
             t = item["stream_type"]
-            if t == "dash":
+            if t == "iframe":
                 return 0
-            elif t == "hls":
+            elif t == "dash":
                 return 1
-            elif t == "native":
+            elif t == "hls":
                 return 2
-            elif t == "iframe":
+            elif t == "native":
                 return 3
             return 4
 
