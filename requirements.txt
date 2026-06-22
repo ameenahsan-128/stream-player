@@ -1,0 +1,9 @@
+requests
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+beautifulsoup4
+lxml
+pillow
+crawl4ai==0.8.9
