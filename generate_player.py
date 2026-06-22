@@ -6,6 +6,8 @@ import json
 import argparse
 import time
 import asyncio
+import threading
+import concurrent.futures
 import base64
 import requests
 import xml.etree.ElementTree as ET
@@ -41,16 +43,19 @@ def save_domain_health(health):
     except Exception as e:
         print(f"[-] Warning: Failed to save domain health: {e}", file=sys.stderr)
 
+domain_health_lock = threading.Lock()
+
 def record_domain_result(health, url, success):
     """Record a success or failure for a domain."""
     domain = urlparse(url).netloc
     if not domain:
         return
-    entry = health.setdefault(domain, {"fail_count": 0, "success_count": 0})
-    if success:
-        entry["success_count"] = entry.get("success_count", 0) + 1
-    else:
-        entry["fail_count"] = entry.get("fail_count", 0) + 1
+    with domain_health_lock:
+        entry = health.setdefault(domain, {"fail_count": 0, "success_count": 0})
+        if success:
+            entry["success_count"] = entry.get("success_count", 0) + 1
+        else:
+            entry["fail_count"] = entry.get("fail_count", 0) + 1
 
 def sort_urls_by_domain_health(urls, health):
     """Sort URLs so healthy domains come first, failing domains last."""
@@ -89,8 +94,10 @@ async def fetch_page_with_browser(url, timeout_ms=25000):
         extra_args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
     )
     run_config = CrawlerRunConfig(
-        wait_until="networkidle",
+        wait_until="domcontentloaded",
         page_timeout=timeout_ms,
+        process_iframes=True,
+        delay_before_return_html=2.0,
         js_code=[
             "window.scrollTo(0, document.body.scrollHeight);",
             "await new Promise(r => setTimeout(r, 1500));",
@@ -2775,7 +2782,7 @@ def crawl_url_recursive(url, depth=0, max_depth=4, visited=None, headers=None, d
     if depth > max_depth:
         return None
         
-    use_browser = should_use_browser(url) and depth <= 1  # Use browser at L0 and L1 portal pages
+    use_browser = should_use_browser(url)  # Use browser if domain requires JS rendering
     method_label = "browser" if use_browser else "requests"
     print(f"{'  ' * depth}[*] Crawling page ({method_label}): {url}")
 
@@ -3936,11 +3943,21 @@ def main():
         expanded_root_urls = sort_urls_by_domain_health(expanded_root_urls, domain_health)
         print(f"[*] Total target URL(s) to process after time-filtering and health-sorting: {len(expanded_root_urls)}")
         
-        # Process and crawl all streams
+        # Process and crawl all streams in parallel
         all_results = []
-        for root_url in expanded_root_urls:
-            results = process_root_url(root_url, max_depth=args.depth, domain_health=domain_health)
-            all_results.extend(results)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_url = {
+                executor.submit(process_root_url, root_url, args.depth, domain_health): root_url
+                for root_url in expanded_root_urls
+            }
+            for future in concurrent.futures.as_completed(future_to_url):
+                url = future_to_url[future]
+                try:
+                    results = future.result()
+                    if results:
+                        all_results.extend(results)
+                except Exception as exc:
+                    print(f"[-] Exception crawling root URL {url}: {exc}", file=sys.stderr)
 
         # Persist updated domain health
         save_domain_health(domain_health)
