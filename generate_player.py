@@ -295,6 +295,9 @@ def is_junk_iframe(url, source_urls=None):
             src_canon = src_parsed.netloc.lower() + src_parsed.path.lower().rstrip("/")
             # Same domain + same/similar path = self-embed
             if iframe_canon == src_canon:
+                # If they have different queries, they are likely different stream feeds on the same wrapper player
+                if parsed.query != src_parsed.query:
+                    continue
                 return True
             # Same domain, different match page = wrong match embed
             if domain == src_parsed.netloc.lower() and path_lower.rstrip("/") != src_parsed.path.lower().rstrip("/"):
@@ -315,11 +318,21 @@ class EpicLinkParser(HTMLParser):
         self.current_tag = None
         self.current_attrs = {}
         self.current_text = []
-        self.open_tags = []  # Stack of tuples: (tag_name, is_ignored)
+        self.open_tags = []  # Stack of tuples: (tag_name, is_ignored, is_whitelisted)
 
     def handle_starttag(self, tag, attrs):
         attr_dict = dict(attrs)
         is_ignored_container = False
+        is_whitelisted = False
+        
+        # Check if container is whitelisted (main post content overrides ignored state of ancestors)
+        for attr_name in ("class", "id"):
+            if attr_name in attr_dict:
+                val = attr_dict[attr_name].lower()
+                if any(w in val for w in ("entry-content", "post-body", "post-content", "post_content", "post-entry", "entry-body", "article-content")):
+                    is_whitelisted = True
+                    break
+        
         if tag in ("aside", "header", "footer", "nav"):
             is_ignored_container = True
         else:
@@ -331,7 +344,7 @@ class EpicLinkParser(HTMLParser):
                             is_ignored_container = True
                             break
         
-        self.open_tags.append((tag, is_ignored_container))
+        self.open_tags.append((tag, is_ignored_container, is_whitelisted))
             
         if tag in ("a", "button", "iframe"):
             self.current_tag = tag
@@ -343,12 +356,19 @@ class EpicLinkParser(HTMLParser):
             self.current_text.append(data)
 
     def handle_endtag(self, tag):
+        # Find the latest whitelisted container index in self.open_tags
+        start_idx = 0
+        for idx in range(len(self.open_tags) - 1, -1, -1):
+            if self.open_tags[idx][2]:  # is_whitelisted is True
+                start_idx = idx
+                break
+                
         # Determine if we are currently inside an ignored container BEFORE popping
-        is_in_ignored = any(is_ignored for _, is_ignored in self.open_tags)
+        is_in_ignored = any(is_ignored for _, is_ignored, _ in self.open_tags[start_idx:])
         
         # Pop from open_tags stack
         while self.open_tags:
-            popped_tag, _ = self.open_tags.pop()
+            popped_tag, _, _ = self.open_tags.pop()
             if popped_tag == tag:
                 break
                 
@@ -1705,11 +1725,24 @@ function loadHLS(url, onSuccess, onFail) {
     recordHlsFailure(data, data && data.details ? data.details : 'HLS error');
     if (isHlsLoadError(data)) {
       hlsLoadErrors += 1;
-      if (!playbackStarted || hlsLoadErrors >= HLS_LOAD_ERROR_FAILOVER_LIMIT || (data && data.fatal)) {
+      if (hlsLoadErrors >= HLS_LOAD_ERROR_FAILOVER_LIMIT) {
         failHls('HLS load error. Shuffling to another HLS link...', data);
         return;
       }
-      startStallWatchdog(playbackAttemptId, 'HLS load errors detected. Trying next HLS link...', Math.min(HLS_STALL_TIMEOUT_MS, 5000));
+      if (data && data.fatal) {
+        ovLoadMsg.textContent = `HLS load recovery ${hlsLoadErrors}/${HLS_LOAD_ERROR_FAILOVER_LIMIT}...`;
+        setStatus('buffer', 'Recovering HLS load...');
+        hlsInstance.startLoad();
+        if (playbackStarted) {
+          startStallWatchdog(playbackAttemptId, 'HLS load errors detected. Trying next HLS link...', Math.min(HLS_STALL_TIMEOUT_MS, 5000));
+        } else {
+          startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
+        }
+        return;
+      }
+      if (playbackStarted) {
+        startStallWatchdog(playbackAttemptId, 'HLS load errors detected. Trying next HLS link...', Math.min(HLS_STALL_TIMEOUT_MS, 5000));
+      }
       return;
     }
     if (data.fatal) {

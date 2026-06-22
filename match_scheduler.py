@@ -97,6 +97,18 @@ DEFAULT_AD_POPUP = """
 <script type="text/javascript" src="https://pl17973277.effectivecpmnetwork.com/66/f1/17/66f11775fe2744312299821ac71b38f1.js"></script>
 """
 
+def is_internet_available():
+    """Check if the system has active internet connectivity by hitting a reliable domain."""
+    import socket
+    try:
+        # Connect to a reliable DNS server or public address
+        socket.setdefaulttimeout(3)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+        return True
+    except socket.error:
+        return False
+
+
 def load_json(filepath):
     if not os.path.exists(filepath):
         return None
@@ -989,6 +1001,7 @@ def resolve_source_shortcuts(source_urls):
     """
     from generate_player import (
         fetch_page_html, EpicLinkParser, is_likely_stream_button,
+        should_use_browser,
     )
     import re as _re
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -1015,7 +1028,9 @@ def resolve_source_shortcuts(source_urls):
 
     for url in source_urls:
         try:
-            html, ok, _ = fetch_page_html(url, headers=headers, use_browser=False, timeout=6)
+            use_browser = should_use_browser(url)
+            timeout = 15 if use_browser else 6
+            html, ok, _ = fetch_page_html(url, headers=headers, use_browser=use_browser, timeout=timeout)
             if not ok or not html:
                 if url not in resolved_set:
                     resolved.append(url)
@@ -1301,7 +1316,9 @@ def auto_discover_matches(force=False, skip_if_active_match=False):
         try:
             # Use browser-based fetch for JS-heavy portals (same as generate_player.py)
             from generate_player import fetch_page_html, should_use_browser
-            html, success, method = fetch_page_html(portal, headers=headers, use_browser=should_use_browser(portal), timeout=5)
+            use_browser = should_use_browser(portal)
+            timeout = 20 if use_browser else 5
+            html, success, method = fetch_page_html(portal, headers=headers, use_browser=use_browser, timeout=timeout)
             if not success or not html:
                 continue
 
@@ -1566,7 +1583,7 @@ def check_and_run():
 
     for match in schedule:
         status = match.get("status", "pending")
-        if status == "completed":
+        if status in ("completed", "review", "failed"):
             continue
         # Self-heal: if a previous run crashed mid-way and left status=processing,
         # treat it as pending so the scheduler retries instead of freezing.
@@ -1581,11 +1598,25 @@ def check_and_run():
         run_start, run_end, _ = active_window(match, scheduler_config)
 
         if run_start <= now <= run_end:
+            fail_count = int(match.get("scrape_fail_count") or 0)
+            max_failures = int(scheduler_config.get("max_scrape_failures") or 5)
+            if fail_count >= max_failures:
+                print(f"[⚠️] Match {match['match_name']} exceeded safety threshold of {max_failures} failures. Moving to 'review' state.")
+                match["status"] = "review"
+                if portal_updates_enabled:
+                    try:
+                        new_token = get_access_token(new_config)
+                        update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                        match["new_blog_prepare_set"] = True
+                    except Exception as e:
+                        print(f"[-] Portal preparing-state update failed: {e}")
+                changed = True
+                continue
+
             cooldown_min = scrape_cooldown_minutes(now, match_time, scheduler_config)
 
             # Failure backoff: if we have had 3+ consecutive failures, skip until
             # at least (fail_count * cooldown_min) minutes have passed since last run.
-            fail_count = int(match.get("scrape_fail_count") or 0)
             if fail_count >= 3:
                 backoff_min = min(fail_count * cooldown_min, 30)  # cap at 30 min
                 last_run_str = match.get("last_run_time")
@@ -1807,7 +1838,10 @@ def check_and_run():
                 except Exception as e:
                     print(f"[-] Scraping failed: {e}")
                     # Increment failure counter for backoff logic
-                    match["scrape_fail_count"] = int(match.get("scrape_fail_count") or 0) + 1
+                    if is_internet_available():
+                        match["scrape_fail_count"] = int(match.get("scrape_fail_count") or 0) + 1
+                    else:
+                        print("[⚠️] System offline — skipping failure count increment.")
                     print(f"[!] Scrape fail count for {match['match_name']}: {match['scrape_fail_count']}")
                     match["status"] = "pending"
                     changed = True
@@ -1819,7 +1853,10 @@ def check_and_run():
                         player_html = pf.read()
                 else:
                     print(f"[-] Output file {temp_output} not found.")
-                    match["scrape_fail_count"] = int(match.get("scrape_fail_count") or 0) + 1
+                    if is_internet_available():
+                        match["scrape_fail_count"] = int(match.get("scrape_fail_count") or 0) + 1
+                    else:
+                        print("[⚠️] System offline — skipping failure count increment.")
                     match["status"] = "pending"
                     changed = True
                     continue
@@ -1827,6 +1864,11 @@ def check_and_run():
                 real_stream_links = extract_stream_links(player_html)
                 if not real_stream_links:
                     print(f"[!] No playable stream links resolved for {match['match_name']}; skipping player-blog upload.")
+                    if is_internet_available():
+                        match["scrape_fail_count"] = int(match.get("scrape_fail_count") or 0) + 1
+                    else:
+                        print("[⚠️] System offline — skipping failure count increment.")
+                    print(f"[!] Scrape fail count for {match['match_name']}: {match['scrape_fail_count']}")
                     # Only set preparing state if the portal page hasn't been set to live yet
                     # (avoid overwriting live links with "preparing" message)
                     if portal_updates_enabled and not match.get("new_blog_prepare_set") and not match.get("new_blog_iframe_set"):

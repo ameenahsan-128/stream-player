@@ -1066,11 +1066,8 @@ def preview_publish_overrides(schedule, target_ist_date, within_hours, now, enab
     if not enabled:
         return {}
     
-    # We use a stable mapping to ensure posts ALWAYS stay in kickoff order,
-    # regardless of when this script runs. We want earlier kickoffs to be
-    # "newer" (larger published date). So we reflect the kickoff time across
-    # a base date in the past.
-    base_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    # Use the start of the current day as base_date to keep upcoming matches' published dates fresh (in 2026)
+    base_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
     
     overrides = {}
     for match in schedule:
@@ -1088,6 +1085,30 @@ def preview_publish_overrides(schedule, target_ist_date, within_hours, now, enab
         overrides[match_key(match)] = published_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
         
     return overrides
+
+
+def published_date_mismatch(config, access_token, post_id, desired_pub):
+    if not desired_pub or not post_id:
+        return False
+    try:
+        blog_id = config.get("blog_id")
+        url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/posts/{post_id}"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            current_pub = res.json().get("published")
+            if current_pub:
+                # Convert both dates to ISO strings with offset for comparison
+                curr_s = current_pub[:-1] + "+00:00" if current_pub.endswith("Z") else current_pub
+                des_s = desired_pub[:-1] + "+00:00" if desired_pub.endswith("Z") else desired_pub
+                curr_dt = datetime.fromisoformat(curr_s)
+                des_dt = datetime.fromisoformat(des_s)
+                if abs((curr_dt - des_dt).total_seconds()) > 2:
+                    print(f"[*] Published date mismatch for post {post_id}: current={current_pub}, desired={desired_pub}")
+                    return True
+    except Exception as e:
+        print(f"[!] Desired published date check failed: {e}")
+    return False
 
 
 def main():
@@ -1348,7 +1369,8 @@ def main():
                         post_id = existing_post_id
                         post_url = existing_post_url
                         post_changed = rendered_content_changed(match, "preview_post", post_html)
-                        if refresh_existing and can_refresh and post_changed:
+                        pub_mismatch = refresh_existing and published_date_mismatch(config, access_token, post_id, publish_overrides.get(match["match_key"]))
+                        if refresh_existing and can_refresh and (post_changed or pub_mismatch):
                             if args.dry_run:
                                 log_dry_run(f"Would refresh existing preview Post for {match['match_name']} ({post_id}).")
                                 changed = True
@@ -1398,10 +1420,12 @@ def main():
                 print(f"[*] Skipping preview Post refresh for active/live match: {match['match_name']}")
             elif not refresh_existing:
                 print(f"[*] Existing preview Post left unchanged for: {match['match_name']} (ID: {post_id})")
-            elif not post_changed:
-                print(f"[*] Existing preview Post already current for: {match['match_name']} (ID: {post_id})")
             else:
-                print(f"[*] Refreshing existing preview Post for: {match['match_name']} (ID: {post_id})...")
+                pub_mismatch = published_date_mismatch(config, access_token, post_id, publish_overrides.get(match["match_key"]))
+                if not post_changed and not pub_mismatch:
+                    print(f"[*] Existing preview Post already current for: {match['match_name']} (ID: {post_id})")
+                else:
+                    print(f"[*] Refreshing existing preview Post for: {match['match_name']} (ID: {post_id})...")
                 try:
                     if args.dry_run:
                         log_dry_run(f"Would refresh preview Post for {match['match_name']} ({post_id}).")
