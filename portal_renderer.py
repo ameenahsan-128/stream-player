@@ -1046,12 +1046,11 @@ def render_preview_post(config, match):
   {portal_text_row("Match Preview", [
       f"{ctx['team1']} vs {ctx['team2']} is scheduled for {ctx['date']} at {ctx['time']}, bringing together two sides with very different strengths.",
       f"{ctx['team1']} will look to control the tempo and create chances through quick attacking phases, while {ctx['team2']} can stay dangerous with compact defending, fast transitions and set-piece pressure.",
-      "The final channel details and live coverage buttons are handled on the dedicated match page and are updated close to kickoff."
+      "The final channel details are handled on the dedicated match page and are updated close to kickoff."
   ])}
   {portal_row(render_square_ad(config), padding="12px")}
   {portal_header_row("Match Page", bg="#006600")}
   {portal_row(cta_html, padding="22px 14px")}
-  {portal_row(render_smartlink_button(config), padding="12px")}
 """
     return render_portal_shell(config, match, body, "upcoming", hero_html=hero_html)
 

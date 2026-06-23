@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 # Import functions to test
 import sys
 sys.path.append("/home/expertz/stream")
-from precreate_posts import preview_publish_overrides, published_date_mismatch, match_key
+from precreate_posts import preview_publish_overrides, published_date_mismatch, match_key, preview_post_refresh_needed
 
 class TestPrecreateOrder(unittest.TestCase):
     def test_preview_publish_overrides_ordering(self):
@@ -83,6 +83,11 @@ class TestPrecreateOrder(unittest.TestCase):
         }
         mismatch = published_date_mismatch(config, access_token, post_id, desired_pub)
         self.assertFalse(mismatch)
+
+    def test_preview_post_refresh_only_when_content_or_publish_date_changes(self):
+        self.assertFalse(preview_post_refresh_needed(False, False))
+        self.assertTrue(preview_post_refresh_needed(True, False))
+        self.assertTrue(preview_post_refresh_needed(False, True))
 
 if __name__ == '__main__':
     unittest.main()

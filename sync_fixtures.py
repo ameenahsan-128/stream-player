@@ -63,10 +63,11 @@ def parse_time_with_offset(date_str, time_text):
     offset_minutes = 0
     if offset_match:
         offset_str = offset_match.group(1)
+        sign = -1 if offset_str.startswith("-") else 1
         if ":" in offset_str:
             parts = offset_str.split(":")
             offset_hours = int(parts[0])
-            offset_minutes = int(parts[1]) if parts[0].startswith("-") else -int(parts[1])
+            offset_minutes = sign * int(parts[1])
         else:
             offset_hours = int(offset_str)
     hour, minute = map(int, time_val.split(":"))

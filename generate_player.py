@@ -779,6 +779,8 @@ input[type=range].vol-slider {
 .badge.hls   { background: rgba(46,204,113,0.12);   color: #2ecc71; border: 1px solid rgba(46,204,113,0.3); }
 .badge.mp4   { background: rgba(155,89,182,0.12);   color: #9b59b6; border: 1px solid rgba(155,89,182,0.3); }
 .badge.iframe{ background: rgba(241,196,15,0.12);   color: #f1c40f; border: 1px solid rgba(241,196,15,0.3); }
+.badge.backup{ background: rgba(255,255,255,0.08);   color: #b8bcc8; border: 1px solid rgba(255,255,255,0.18); }
+.badge.client{ background: rgba(255, 99, 132, 0.14); color: #ff6384; border: 1px solid rgba(255, 99, 132, 0.32); }
 .link-play-icon { color: #444; transition: color 0.15s; }
 .stream-link-item:hover .link-play-icon,
 .stream-link-item.active .link-play-icon { color: var(--red); }
@@ -1297,6 +1299,7 @@ let hlsInstance  = null;
 let activeIndex  = -1;
 let playbackAttemptId = 0;
 let playbackStarted = false;
+let playbackHealthySince = 0;
 let startupWatchdog = null;
 let stallWatchdog = null;
 let hlsManifestWatchdog = null;
@@ -1305,15 +1308,17 @@ let lastProgressTime = 0;
 let lastProgressPosition = 0;
 let preferredFailoverType = null;
 let lastHlsFailure = null;
-const STARTUP_TIMEOUT_MS = 15000;
-const STALL_TIMEOUT_MS = 15000;
-// HLS is prone to silent stalls: use longer timeouts to prevent aggressive link switching
-const HLS_MANIFEST_TIMEOUT_MS = 15000;
-const HLS_PLAYBACK_TIMEOUT_MS = 20000;
-const HLS_STALL_TIMEOUT_MS = 15000;
+const AUTOSWITCH_DELAY_MS = 8000;
+const STABLE_PLAYBACK_LOCK_MS = 30000;
+const STARTUP_TIMEOUT_MS = 25000;
+const STALL_TIMEOUT_MS = 25000;
+// HLS is prone to silent stalls: use longer timeouts to prevent aggressive link switching.
+const HLS_MANIFEST_TIMEOUT_MS = 25000;
+const HLS_PLAYBACK_TIMEOUT_MS = 30000;
+const HLS_STALL_TIMEOUT_MS = 30000;
 const HLS_MAX_NETWORK_RECOVERIES = 4;
 const HLS_MAX_MEDIA_RECOVERIES = 4;
-const HLS_LOAD_ERROR_FAILOVER_LIMIT = 3;
+const HLS_LOAD_ERROR_FAILOVER_LIMIT = 6;
 
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1417,6 +1422,7 @@ function clearPlaybackTimers() {
 function resetPlaybackHealth() {
   clearPlaybackTimers();
   playbackStarted = false;
+  playbackHealthySince = 0;
   lastProgressTime = Date.now();
   lastProgressPosition = Number.isFinite(video.currentTime) ? video.currentTime : 0;
 }
@@ -1431,11 +1437,20 @@ function markCurrentLinkSuccess() {
 }
 
 function markPlaybackHealthy() {
+  if (!playbackHealthySince) playbackHealthySince = Date.now();
   playbackStarted = true;
   lastProgressTime = Date.now();
   lastProgressPosition = Number.isFinite(video.currentTime) ? video.currentTime : lastProgressPosition;
   clearPlaybackTimers();
   markCurrentLinkSuccess();
+}
+
+function shouldAutoSwitchAfterFailure(activeLnk, nextIdx) {
+  if (nextIdx === -1) return false;
+  if (!activeLnk) return true;
+  if (activeLnk.browserCandidate) return false;
+  if (playbackHealthySince && Date.now() - playbackHealthySince >= STABLE_PLAYBACK_LOCK_MS) return false;
+  return true;
 }
 
 function failCurrentLink(reason) {
@@ -1557,13 +1572,20 @@ function showError(msg) {
   setEngineBadge('none');
   
   if (finalNextIdx !== -1) {
+    if (!shouldAutoSwitchAfterFailure(activeLnk, finalNextIdx)) {
+      const holdReason = activeLnk && activeLnk.browserCandidate
+        ? 'This backup may still work in your browser; use Try Next Link if it does not recover.'
+        : 'Auto-switch paused because this stream already played; use Try Next Link if it does not recover.';
+      errMsg.textContent = `${msg || 'Stream could not be loaded.'} ${holdReason}`;
+      return;
+    }
     clearTimeout(autoswitchTimeout);
     ovLoadMsg.textContent = autoswitchMessage(failedType, STREAM_LINKS[finalNextIdx].type);
     ovLoad.classList.remove('hidden');
     ovErr.classList.add('hidden');
     autoswitchTimeout = setTimeout(() => {
       switchStream(finalNextIdx, { preserveFailover: true });
-    }, 1000);
+    }, AUTOSWITCH_DELAY_MS);
   }
 }
 
@@ -2092,10 +2114,10 @@ retryBtn.addEventListener('click', () => {
    LINK LIST UI
 ═══════════════════════════════════════════════════════════════ */
 const BADGE_LABELS = {
-	  hd:'HD', sd:'SD', eng:'ENG', ara:'ARA', ios:'🍎 iPhone',
-	  backup:'BACKUP',
-	  auto:'AUTO', dash:'DASH', hls:'HLS', mp4:'MP4', iframe:'EMBED'
-	};
+		  hd:'HD', sd:'SD', eng:'ENG', ara:'ARA', ios:'🍎 iPhone',
+		  backup:'BACKUP', client:'CLIENT',
+		  auto:'AUTO', dash:'DASH', hls:'HLS', mp4:'MP4', iframe:'EMBED'
+		};
 
 function buildLinks() {
   linksList.innerHTML = '';
@@ -3050,6 +3072,64 @@ def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, sta
     return base
 
 
+CLIENT_BROWSER_FAILURE_EXACT = {
+    "hls-manifest-cors-blocked",
+    "dash-manifest-cors-blocked",
+    "hls-segment-cors-blocked",
+    "hls-child-cors-blocked",
+    "dash-init-cors-blocked",
+}
+
+CLIENT_BROWSER_FAILURE_PREFIXES = (
+    "http-401",
+    "http-403",
+    "hls-segment-http-401",
+    "hls-segment-http-403",
+    "hls-child-http-401",
+    "hls-child-http-403",
+    "dash-init-http-401",
+    "dash-init-http-403",
+)
+
+
+def is_client_browser_viable_probe_failure(probe):
+    """Return True for server-probe access/CORS failures that a client browser may still try."""
+    probe = probe or {}
+    reason = str(probe.get("validation_reason") or probe.get("error") or "").lower()
+    status_codes = {
+        probe.get("status_code"),
+        probe.get("media_probe_status"),
+    }
+    if any(status in (401, 403) for status in status_codes):
+        return True
+    if reason in CLIENT_BROWSER_FAILURE_EXACT:
+        return True
+    return any(reason.startswith(prefix) for prefix in CLIENT_BROWSER_FAILURE_PREFIXES)
+
+
+def make_client_browser_candidate_probe(probe, stream_type, url=None, domain_health=None):
+    """Convert a server-side false-negative candidate into a low-priority browser trial."""
+    probe = dict(probe or {})
+    reason = str(probe.get("validation_reason") or probe.get("error") or "server-probe-blocked")
+    probe["working"] = True
+    probe["backup"] = True
+    probe["browser_candidate"] = True
+    probe["validation_status"] = "client_browser_candidate"
+    probe["validation_reason"] = f"client-browser-candidate:{reason}"
+    probe["error"] = ""
+    score = score_stream_probe(
+        stream_type,
+        probe.get("latency_ms"),
+        height=probe.get("height"),
+        bandwidth=probe.get("bandwidth"),
+        status_code=probe.get("status_code") or probe.get("media_probe_status"),
+        url=url,
+        domain_health=domain_health,
+    )
+    probe["score"] = max(20, score - 260)
+    return probe
+
+
 def infer_stream_type_from_url(url):
     parsed = urlparse(url)
     path_lower = parsed.path.lower()
@@ -3998,6 +4078,7 @@ def main():
                     domain_health=domain_health,
                     referer=probe_referer
                 )
+                direct_probe = probe
 
                 # If inner (extracted) URL failed but original is a wrapper iframe,
                 # fall back to the original iframe URL — it handles auth client-side.
@@ -4011,11 +4092,22 @@ def main():
                         playback_url = original_stream_url
                         s_type = "iframe"
                         probe = probe_stream_url(playback_url, s_type, domain_health=domain_health)
+                        if not probe.get("working") and is_client_browser_viable_probe_failure(direct_probe):
+                            print(f"[*] Keeping wrapper as client-browser backup after server probe failed: {original_stream_url[:80]}")
+                            probe = make_client_browser_candidate_probe(direct_probe, s_type, playback_url, domain_health)
 
                 # Check duplicate status again after fallback
                 if playback_url in seen_urls:
                     print(f"[-] Skipping duplicate stream URL after fallback for: {label_raw} (Stream {s_idx})")
                     continue
+
+                if (
+                    not probe.get("working")
+                    and s_type in ("hls", "dash", "native")
+                    and is_client_browser_viable_probe_failure(probe)
+                ):
+                    print(f"[*] Keeping server-blocked stream as client-browser backup: {playback_url[:80]} ({probe.get('validation_reason') or probe.get('error')})")
+                    probe = make_client_browser_candidate_probe(probe, s_type, playback_url, domain_health)
 
                 if not probe.get("working"):
                     print(f"[-] Skipping dead/unresponsive stream URL: {playback_url} ({probe.get('validation_reason') or probe.get('error')})")
@@ -4042,6 +4134,8 @@ def main():
                     badges.append("ios")
                 if probe.get("backup"):
                     badges.append("backup")
+                if probe.get("browser_candidate"):
+                    badges.append("client")
                     
                 badges = list(dict.fromkeys(badges))
                 
@@ -4064,6 +4158,8 @@ def main():
                     meta_parts.append(f"{probe['latency_ms']} ms")
                 if probe.get("validation_reason") and probe.get("backup"):
                     meta_parts.append("Backup")
+                if probe.get("browser_candidate"):
+                    meta_parts.append("Client Browser Candidate")
                 
                 if "eng" in badges:
                     meta_parts.append("English Audio")
@@ -4140,8 +4236,12 @@ def main():
                 "url": stream_url,
                 "score": item.get("score", 0),
                 "latencyMs": (item.get("probe") or {}).get("latency_ms"),
-                "height": (item.get("probe") or {}).get("height")
+                "height": (item.get("probe") or {}).get("height"),
+                "validationStatus": (item.get("probe") or {}).get("validation_status"),
+                "validationReason": (item.get("probe") or {}).get("validation_reason"),
             }
+            if (item.get("probe") or {}).get("browser_candidate"):
+                js_obj["browserCandidate"] = True
             if clear_keys:
                 js_obj["clearKeys"] = clear_keys
                 

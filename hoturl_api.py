@@ -54,6 +54,9 @@ def load_schedule():
 
 
 def save_schedule(schedule):
+    parent = os.path.dirname(SCHEDULE_FILE)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
         json.dump(schedule, f, indent=2)
 
@@ -70,6 +73,9 @@ def log_submission(entry):
     # Keep last 500 entries
     if len(logs) > 500:
         logs = logs[-500:]
+    parent = os.path.dirname(HOT_LOG_FILE)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(HOT_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(logs, f, indent=2)
 
@@ -208,12 +214,14 @@ async def submit_url(req: SubmitRequest):
     # Trigger an immediate scheduler run in the background so the new
     # source gets scraped within seconds instead of waiting for cron.
     try:
-        subprocess.Popen(
-            ["python3", "match_scheduler.py", "--once"],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            stdout=open("data/scheduler.log", "a"),
-            stderr=subprocess.STDOUT,
-        )
+        os.makedirs("data", exist_ok=True)
+        with open("data/scheduler.log", "a", encoding="utf-8") as scheduler_log:
+            subprocess.Popen(
+                ["python3", "match_scheduler.py", "--once"],
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                stdout=scheduler_log,
+                stderr=subprocess.STDOUT,
+            )
         triggered = True
     except Exception:
         triggered = False

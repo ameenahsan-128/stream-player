@@ -1514,6 +1514,7 @@ def auto_discover_matches(force=False, skip_if_active_match=False):
     # window opens, source URLs already point to deeper pages.
     try:
         now_utc = datetime.now(timezone.utc)
+        shortcuts_changed = False
         for match in schedule:
             if match.get("status") in ("completed", "ended"):
                 continue
@@ -1540,8 +1541,11 @@ def auto_discover_matches(force=False, skip_if_active_match=False):
                         added += 1
                 if added:
                     print(f"[⚡] Added {added} pre-resolved L2/L3 source(s) for {match.get('match_name')}")
-                    save_schedule(schedule, automation_config)
+                    shortcuts_changed = True
             match["_shortcuts_resolved"] = True
+            shortcuts_changed = True
+        if shortcuts_changed:
+            save_schedule(schedule, automation_config)
     except Exception as e:
         print(f"[-] Source shortcut pre-resolution failed (non-fatal): {e}")
 
@@ -1624,6 +1628,7 @@ def check_and_run():
         if status == "processing":
             print(f"[!] Match '{match.get('match_name')}' found in 'processing' state — resetting to 'pending' for retry.")
             match["status"] = "pending"
+            changed = True
             status = "pending"
         match["match_key"] = match.get("match_key") or match_key(match)
         portal_updates_enabled = has_new_oauth and not is_manual_portal_match(match)

@@ -29,7 +29,9 @@ import re
 import sys
 import time
 from datetime import datetime, timezone, timedelta
+from html import escape, unescape
 from io import BytesIO
+from urllib.parse import quote
 
 import requests
 
@@ -192,8 +194,8 @@ def fetch_rss_items(feed_url, max_items=5, timeout=10):
             link_m = re.search(r"<link[^>]*>(https?://[^<]+)</link>|<link[^>]+href=[\"'](https?://[^\"']+)[\"']", block, re.DOTALL)
             pub_m = re.search(r"<(?:pubDate|published|updated)[^>]*>(.*?)</(?:pubDate|published|updated)>", block, re.DOTALL)
 
-            title = _strip_cdata(_strip_tags(title_m.group(1) if title_m else "")).strip()
-            desc = _strip_cdata(_strip_tags(desc_m.group(1) if desc_m else "")).strip()[:500]
+            title = _clean_feed_text(title_m.group(1) if title_m else "")
+            desc = _clean_feed_text(desc_m.group(1) if desc_m else "")[:500]
             link = (link_m.group(1) or link_m.group(2)) if link_m else ""
             pub = (pub_m.group(1) if pub_m else "").strip()[:100]
 
@@ -211,6 +213,17 @@ def _strip_tags(text):
 
 def _strip_cdata(text):
     return re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", text or "", flags=re.DOTALL)
+
+
+def _clean_feed_text(text):
+    return unescape(_strip_tags(_strip_cdata(text))).strip()
+
+
+def _safe_url(url):
+    url = unescape(str(url or "").strip())
+    if not url.startswith(("http://", "https://")):
+        return ""
+    return quote(url, safe=":/?&=%#@+!$,;'()*[]")
 
 
 def gather_top_football_news(max_total=8):
@@ -322,10 +335,13 @@ def fallback_blog_content(news_items):
 
     items_html = ""
     for item in news_items[:6]:
-        link_html = f' <a href="{item["link"]}" target="_blank" rel="noopener">Read more</a>' if item.get("link") else ""
+        safe_link = _safe_url(item.get("link"))
+        link_html = f' <a href="{escape(safe_link, quote=True)}" target="_blank" rel="noopener">Read more</a>' if safe_link else ""
+        title_html = escape(str(item.get("title") or "Football News"))
+        summary_html = escape(str(item.get("summary") or "Check out the latest developments in this story."))
         items_html += f"""
-<h2>{item['title']}</h2>
-<p>{item.get('summary', 'Check out the latest developments in this story.')}{link_html}</p>
+<h2>{title_html}</h2>
+<p>{summary_html}{link_html}</p>
 """
 
     body = f"""
@@ -502,9 +518,9 @@ def build_post_html(title, body_html, thumbnail_url, news_items, today_str):
     sources_html = ""
     if news_items:
         links = [
-            f'<li><a href="{item["link"]}" target="_blank" rel="noopener">{item["title"][:80]}</a></li>'
+            f'<li><a href="{escape(_safe_url(item.get("link")), quote=True)}" target="_blank" rel="noopener">{escape(str(item.get("title") or "Football News")[:80])}</a></li>'
             for item in news_items[:5]
-            if item.get("link")
+            if _safe_url(item.get("link"))
         ]
         if links:
             sources_html = f"""
@@ -517,7 +533,7 @@ def build_post_html(title, body_html, thumbnail_url, news_items, today_str):
     if thumbnail_url:
         thumb_html = f"""
 <div style="text-align:center; margin:0 0 24px;">
-  <img src="{thumbnail_url}" alt="{title}" style="width:100%; max-width:700px; height:auto; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.15);" />
+  <img src="{escape(str(thumbnail_url), quote=True)}" alt="{escape(str(title), quote=True)}" style="width:100%; max-width:700px; height:auto; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.15);" />
 </div>"""
 
     return f"""<div style="font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif; max-width:720px; margin:0 auto; padding:10px; color:#1a1a2e; line-height:1.7;">

@@ -1145,6 +1145,10 @@ def published_date_mismatch(config, access_token, post_id, desired_pub):
     return False
 
 
+def preview_post_refresh_needed(post_changed, pub_mismatch):
+    return bool(post_changed or pub_mismatch)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Create/update portal Blogger preview posts and streaming pages safely.")
@@ -1456,8 +1460,9 @@ def main():
                 print(f"[*] Existing preview Post left unchanged for: {match['match_name']} (ID: {post_id})")
             else:
                 pub_mismatch = published_date_mismatch(config, access_token, post_id, publish_overrides.get(match["match_key"]))
-                if not post_changed and not pub_mismatch:
+                if not preview_post_refresh_needed(post_changed, pub_mismatch):
                     print(f"[*] Existing preview Post already current for: {match['match_name']} (ID: {post_id})")
+                    continue
                 else:
                     print(f"[*] Refreshing existing preview Post for: {match['match_name']} (ID: {post_id})...")
                 try:
