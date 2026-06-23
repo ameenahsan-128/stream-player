@@ -781,6 +781,8 @@ input[type=range].vol-slider {
 .badge.iframe{ background: rgba(241,196,15,0.12);   color: #f1c40f; border: 1px solid rgba(241,196,15,0.3); }
 .badge.backup{ background: rgba(255,255,255,0.08);   color: #b8bcc8; border: 1px solid rgba(255,255,255,0.18); }
 .badge.client{ background: rgba(255, 99, 132, 0.14); color: #ff6384; border: 1px solid rgba(255, 99, 132, 0.32); }
+.badge.smooth{ background: rgba(0, 209, 178, 0.16); color: #00d1b2; border: 1px solid rgba(0, 209, 178, 0.34); }
+.badge.risk  { background: rgba(255, 193, 7, 0.14); color: #ffc107; border: 1px solid rgba(255, 193, 7, 0.34); }
 .link-play-icon { color: #444; transition: color 0.15s; }
 .stream-link-item:hover .link-play-icon,
 .stream-link-item.active .link-play-icon { color: var(--red); }
@@ -1166,6 +1168,17 @@ STREAM_LINKS.forEach((lnk, i) => {
 function sortAndRebuildLinks() {
   const activeId = STREAM_LINKS[activeIndex] ? STREAM_LINKS[activeIndex].id : null;
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) || (navigator.userAgent.includes('Macintosh') && 'ontouchend' in document);
+
+  if (linkOrderLocked) {
+    if (activeId !== null) {
+      activeIndex = STREAM_LINKS.findIndex(l => l.id === activeId);
+    }
+    buildLinks();
+    if (activeIndex !== -1) {
+      setActive(activeIndex);
+    }
+    return;
+  }
   
   STREAM_LINKS.sort((a, b) => {
     // 1. Prioritize active stream to the top so it is always visible
@@ -1189,7 +1202,15 @@ function sortAndRebuildLinks() {
     if (a.success && !b.success) return -1;
     if (!a.success && b.success) return 1;
 
-    // 4. Compare by score descending, with custom client-side iOS adjustments
+    // 4. Reliability tier beats raw score. This prevents a high-resolution DASH
+    // link with unknown/risky smoothness from staying above a measured stable link.
+    const rankA = reliabilityRank(a);
+    const rankB = reliabilityRank(b);
+    if (rankA !== rankB) {
+      return rankA - rankB;
+    }
+
+    // 5. Compare by score descending, with custom client-side iOS adjustments
     let scoreA = a.score || 0;
     let scoreB = b.score || 0;
     
@@ -1209,6 +1230,8 @@ function sortAndRebuildLinks() {
     // Keep original python priority
     return a.id - b.id;
   });
+
+  linkOrderLocked = true;
   
   if (activeId !== null) {
     activeIndex = STREAM_LINKS.findIndex(l => l.id === activeId);
@@ -1306,15 +1329,19 @@ let hlsManifestWatchdog = null;
 let hlsSegmentHealthTimer = null;
 let lastProgressTime = 0;
 let lastProgressPosition = 0;
+let recoveryStartedAt = 0;
+let linkOrderLocked = false;
 let preferredFailoverType = null;
 let lastHlsFailure = null;
 const AUTOSWITCH_DELAY_MS = 8000;
-const STABLE_PLAYBACK_LOCK_MS = 30000;
-const STARTUP_TIMEOUT_MS = 25000;
+const STARTUP_AUTOSWITCH_DELAY_MS = 1200;
+const POST_START_RECOVERY_MS = 60000;
+const STABLE_PLAYBACK_LOCK_MS = 60000;
+const STARTUP_TIMEOUT_MS = 12000;
 const STALL_TIMEOUT_MS = 25000;
 // HLS is prone to silent stalls: use longer timeouts to prevent aggressive link switching.
-const HLS_MANIFEST_TIMEOUT_MS = 25000;
-const HLS_PLAYBACK_TIMEOUT_MS = 30000;
+const HLS_MANIFEST_TIMEOUT_MS = 18000;
+const HLS_PLAYBACK_TIMEOUT_MS = 18000;
 const HLS_STALL_TIMEOUT_MS = 30000;
 const HLS_MAX_NETWORK_RECOVERIES = 4;
 const HLS_MAX_MEDIA_RECOVERIES = 4;
@@ -1355,6 +1382,21 @@ function setEngineTry(type, state) {
 const PLAYBACK_TYPE_PRIORITY = { dash: 0, hls: 1, native: 2, iframe: 3 };
 const priorityOf = (lnk) => PLAYBACK_TYPE_PRIORITY[lnk.type] ?? 4;
 
+function reliabilityRank(lnk) {
+  if (!lnk) return 9;
+  if (lnk.browserCandidate || (lnk.badges || []).includes('backup')) return 8;
+  const label = String(lnk.smoothnessLabel || 'unknown').toLowerCase();
+  if (label === 'smooth') return 0;
+  if (label === 'stable') return 1;
+  if (label === 'ok') return 2;
+  if (label === 'buffer-risk') return 7;
+  if (lnk.type === 'iframe') return 3;
+  if (lnk.type === 'native') return 4;
+  if (lnk.type === 'dash') return 5;
+  if (lnk.type === 'hls') return 6;
+  return 6;
+}
+
 function typeLabel(type) {
   return (type || 'stream').toUpperCase();
 }
@@ -1374,7 +1416,7 @@ function findNextLinkIndex(preferredType) {
   if (preferredType) {
     const sameTypeUntried = candidates.filter(({ lnk }) => lnk.type === preferredType && lnk.failCount === 0);
     if (sameTypeUntried.length) {
-      const picked = preferredType === 'hls' ? randomChoice(sameTypeUntried) : sameTypeUntried[0];
+      const picked = sameTypeUntried[0];
       return picked.i;
     }
     if (preferredType === 'hls') {
@@ -1382,7 +1424,7 @@ function findNextLinkIndex(preferredType) {
       if (sameType.length) {
         const minFails = Math.min(...sameType.map(({ lnk }) => lnk.failCount));
         const leastFailed = sameType.filter(({ lnk }) => lnk.failCount === minFails);
-        return randomChoice(leastFailed).i;
+        return leastFailed[0].i;
       }
     }
   }
@@ -1408,21 +1450,30 @@ function autoswitchMessage(failedType, nextType) {
   return 'Stream error. Autoswitching to next link...';
 }
 
-function clearPlaybackTimers() {
+function clearStartupAndStallTimers() {
   clearTimeout(startupWatchdog);
   clearTimeout(stallWatchdog);
-  clearTimeout(hlsManifestWatchdog);
-  clearInterval(hlsSegmentHealthTimer);
   startupWatchdog = null;
   stallWatchdog = null;
+}
+
+function clearEngineHealthTimers() {
+  clearTimeout(hlsManifestWatchdog);
+  clearInterval(hlsSegmentHealthTimer);
   hlsManifestWatchdog = null;
   hlsSegmentHealthTimer = null;
+}
+
+function clearPlaybackTimers() {
+  clearStartupAndStallTimers();
+  clearEngineHealthTimers();
 }
 
 function resetPlaybackHealth() {
   clearPlaybackTimers();
   playbackStarted = false;
   playbackHealthySince = 0;
+  recoveryStartedAt = 0;
   lastProgressTime = Date.now();
   lastProgressPosition = Number.isFinite(video.currentTime) ? video.currentTime : 0;
 }
@@ -1439,17 +1490,24 @@ function markCurrentLinkSuccess() {
 function markPlaybackHealthy() {
   if (!playbackHealthySince) playbackHealthySince = Date.now();
   playbackStarted = true;
+  recoveryStartedAt = 0;
   lastProgressTime = Date.now();
   lastProgressPosition = Number.isFinite(video.currentTime) ? video.currentTime : lastProgressPosition;
-  clearPlaybackTimers();
+  clearStartupAndStallTimers();
   markCurrentLinkSuccess();
+}
+
+function isStablePlaybackLocked() {
+  return playbackHealthySince && Date.now() - playbackHealthySince >= STABLE_PLAYBACK_LOCK_MS;
 }
 
 function shouldAutoSwitchAfterFailure(activeLnk, nextIdx) {
   if (nextIdx === -1) return false;
   if (!activeLnk) return true;
+  const nextLnk = STREAM_LINKS[nextIdx];
   if (activeLnk.browserCandidate) return false;
-  if (playbackHealthySince && Date.now() - playbackHealthySince >= STABLE_PLAYBACK_LOCK_MS) return false;
+  if ((playbackStarted || playbackHealthySince) && activeLnk.type === 'hls' && nextLnk && nextLnk.type !== 'hls') return false;
+  if (isStablePlaybackLocked()) return false;
   return true;
 }
 
@@ -1472,18 +1530,30 @@ function activeStallTimeout() {
 
 function startStallWatchdog(attemptId, message, timeoutMs) {
   if (!playbackStarted || vwrap.classList.contains('iframe-mode')) return;
-  const waitMs = timeoutMs || activeStallTimeout();
+  if (isStablePlaybackLocked()) {
+    clearTimeout(stallWatchdog);
+    stallWatchdog = null;
+    return;
+  }
+  const waitMs = Math.max(timeoutMs || activeStallTimeout(), POST_START_RECOVERY_MS);
+  if (!recoveryStartedAt) {
+    recoveryStartedAt = lastProgressTime || Date.now();
+  }
+  const elapsedWithoutProgress = Math.max(Date.now() - lastProgressTime, Date.now() - recoveryStartedAt);
+  const remainingMs = Math.max(1000, waitMs - elapsedWithoutProgress);
   clearTimeout(stallWatchdog);
   stallWatchdog = setTimeout(() => {
     if (attemptId !== playbackAttemptId || !playbackStarted || vwrap.classList.contains('iframe-mode')) return;
     if (video.paused) {
       lastProgressTime = Date.now();
+      recoveryStartedAt = 0;
       return;
     }
+    if (isStablePlaybackLocked()) return;
     if (Date.now() - lastProgressTime >= waitMs) {
       failCurrentLink(message || 'Playback stalled. Trying next link...');
     }
-  }, waitMs);
+  }, remainingMs);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1539,9 +1609,11 @@ function showError(msg) {
   ovErr.classList.remove('hidden');
   const activeLnk = STREAM_LINKS[activeIndex];
   const failedType = activeLnk ? activeLnk.type : null;
+  const failedBeforePlayback = !playbackStarted && !playbackHealthySince;
+  const failoverType = preferredFailoverType || ((playbackStarted || playbackHealthySince) ? failedType : null);
   
   // Find next link before sorting
-  const nextIdx = findNextLinkIndex(preferredFailoverType);
+  const nextIdx = findNextLinkIndex(failoverType);
   let nextId = null;
 
   if (nextIdx !== -1) {
@@ -1561,7 +1633,7 @@ function showError(msg) {
     finalNextIdx = STREAM_LINKS.findIndex(l => l.id === nextId);
   }
 
-  if (preferredFailoverType === 'hls' && failedType === 'hls' && (finalNextIdx === -1 || STREAM_LINKS[finalNextIdx].type !== 'hls')) {
+  if (failoverType === 'hls' && failedType === 'hls' && (finalNextIdx === -1 || STREAM_LINKS[finalNextIdx].type !== 'hls')) {
     stopAfterManualHlsFailure(msg || hlsFailureText());
     return;
   }
@@ -1585,7 +1657,7 @@ function showError(msg) {
     ovErr.classList.add('hidden');
     autoswitchTimeout = setTimeout(() => {
       switchStream(finalNextIdx, { preserveFailover: true });
-    }, AUTOSWITCH_DELAY_MS);
+    }, failedBeforePlayback ? STARTUP_AUTOSWITCH_DELAY_MS : AUTOSWITCH_DELAY_MS);
   }
 }
 
@@ -1743,10 +1815,10 @@ function loadHLS(url, onSuccess, onFail) {
         return;
       }
       if (Date.now() - lastProgressTime > HLS_STALL_TIMEOUT_MS) {
-        clearInterval(hlsSegmentHealthTimer);
-        failCurrentLink('HLS segment health check failed — stream stalled. Switching...');
+        setStatus('buffer', 'Recovering HLS stream...');
+        startStallWatchdog(attemptId, 'HLS segment health check failed. Trying next HLS link...', POST_START_RECOVERY_MS);
       }
-    }, 2000);
+    }, 5000);
     if (onSuccess) onSuccess();
   });
 
@@ -1755,40 +1827,56 @@ function loadHLS(url, onSuccess, onFail) {
     if (isHlsLoadError(data)) {
       hlsLoadErrors += 1;
       if (hlsLoadErrors >= HLS_LOAD_ERROR_FAILOVER_LIMIT) {
+        if (playbackStarted) {
+          ovLoadMsg.textContent = `Recovering HLS load ${hlsLoadErrors}/${HLS_LOAD_ERROR_FAILOVER_LIMIT}...`;
+          setStatus('buffer', 'Recovering HLS load...');
+          try { hlsInstance.startLoad(); } catch(e) {}
+          startStallWatchdog(attemptId, 'HLS load errors detected. Trying next HLS link...', POST_START_RECOVERY_MS);
+          return;
+        }
         failHls('HLS load error. Shuffling to another HLS link...', data);
         return;
       }
       if (data && data.fatal) {
-        playbackStarted = false;
         ovLoadMsg.textContent = `HLS load recovery ${hlsLoadErrors}/${HLS_LOAD_ERROR_FAILOVER_LIMIT}...`;
         setStatus('buffer', 'Recovering HLS load...');
         hlsInstance.startLoad();
-        startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
+        if (playbackStarted) {
+          startStallWatchdog(attemptId, hlsFailureText(), POST_START_RECOVERY_MS);
+        } else {
+          startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
+        }
         return;
       }
       if (playbackStarted) {
-        startStallWatchdog(playbackAttemptId, 'HLS load errors detected. Trying next HLS link...', Math.min(HLS_STALL_TIMEOUT_MS, 5000));
+        startStallWatchdog(playbackAttemptId, 'HLS load errors detected. Trying next HLS link...', HLS_STALL_TIMEOUT_MS);
       }
       return;
     }
     if (data.fatal) {
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < HLS_MAX_NETWORK_RECOVERIES) {
         networkRecoveries += 1;
-        playbackStarted = false;
         ovLoadMsg.textContent = `HLS network recovery ${networkRecoveries}/${HLS_MAX_NETWORK_RECOVERIES}...`;
         setStatus('buffer', 'Recovering HLS network...');
         hlsInstance.startLoad();
-        startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
+        if (playbackStarted) {
+          startStallWatchdog(attemptId, hlsFailureText(), POST_START_RECOVERY_MS);
+        } else {
+          startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
+        }
         return;
       }
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < HLS_MAX_MEDIA_RECOVERIES) {
         mediaRecoveries += 1;
-        playbackStarted = false;
         ovLoadMsg.textContent = `HLS media recovery ${mediaRecoveries}/${HLS_MAX_MEDIA_RECOVERIES}...`;
         setStatus('buffer', 'Recovering HLS media...');
         hlsInstance.recoverMediaError();
         try { video.play().catch(() => {}); } catch(e) {}
-        startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
+        if (playbackStarted) {
+          startStallWatchdog(attemptId, hlsFailureText(), POST_START_RECOVERY_MS);
+        } else {
+          startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
+        }
         return;
       }
       failHls('fatal error', data);
@@ -2115,7 +2203,7 @@ retryBtn.addEventListener('click', () => {
 ═══════════════════════════════════════════════════════════════ */
 const BADGE_LABELS = {
 		  hd:'HD', sd:'SD', eng:'ENG', ara:'ARA', ios:'🍎 iPhone',
-		  backup:'BACKUP', client:'CLIENT',
+		  backup:'BACKUP', client:'CLIENT', smooth:'SMOOTH', risk:'BUFFER RISK',
 		  auto:'AUTO', dash:'DASH', hls:'HLS', mp4:'MP4', iframe:'EMBED'
 		};
 
@@ -3016,7 +3104,16 @@ def parse_manifest_quality(text, stream_type):
     return quality
 
 
-def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, status_code=None, url=None, domain_health=None):
+def score_stream_probe(
+    stream_type,
+    latency_ms,
+    height=None,
+    bandwidth=None,
+    status_code=None,
+    url=None,
+    domain_health=None,
+    smoothness_score=0,
+):
     base = {
         "iframe": 380,
         "dash": 360,
@@ -3045,6 +3142,8 @@ def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, sta
         base -= 10
     if latency_ms is not None:
         base -= min(int(latency_ms / 100), 60)
+    if smoothness_score:
+        base += int(smoothness_score)
 
     if url:
         url_lower = url.lower()
@@ -3070,6 +3169,150 @@ def score_stream_probe(stream_type, latency_ms, height=None, bandwidth=None, sta
                             print(f"[Health Penalty] Domain {domain} has fail rate {fail_rate:.1%} (fails: {fails}, total: {total}). Applied -{penalty} penalty. New score: {base}")
 
     return base
+
+
+PLAYBACK_RISK_URL_PATTERNS = {
+    "ts.sptck.cfd/hls/tist1.m3u8": "frequent-browser-buffering",
+}
+
+
+def playback_risk_reason_for_url(url):
+    url_lower = (url or "").lower()
+    for pattern, reason in PLAYBACK_RISK_URL_PATTERNS.items():
+        if pattern in url_lower:
+            return reason
+    return ""
+
+
+def apply_playback_risk_override(url, probe):
+    reason = playback_risk_reason_for_url(url)
+    if not reason:
+        return probe
+    probe["playback_risk_reason"] = reason
+    probe["smoothness_label"] = "buffer-risk"
+    probe["smoothness_score"] = min(int(probe.get("smoothness_score") or 0), -120)
+    existing_reason = probe.get("validation_reason") or "ok"
+    if "playback-risk:" not in existing_reason:
+        probe["validation_reason"] = f"{existing_reason};playback-risk:{reason}"
+    return probe
+
+
+def summarize_hls_smoothness(samples):
+    usable = [
+        s for s in (samples or [])
+        if s.get("ok") and (s.get("headroom") is not None or s.get("download_ratio") is not None)
+    ]
+    if not usable:
+        return {
+            "smoothness_score": 0,
+            "smoothness_label": "unknown",
+            "segment_count": 0,
+            "segment_avg_ms": None,
+            "segment_jitter_ms": None,
+            "buffer_headroom": None,
+        }
+
+    estimated_times = [s["estimated_download_ms"] for s in usable if s.get("estimated_download_ms") is not None]
+    ratios = [s["download_ratio"] for s in usable if s.get("download_ratio") is not None]
+    headrooms = [s["headroom"] for s in usable if s.get("headroom") is not None]
+
+    avg_ms = int(sum(estimated_times) / len(estimated_times)) if estimated_times else None
+    jitter_ms = int(max(estimated_times) - min(estimated_times)) if len(estimated_times) >= 2 else 0
+    avg_ratio = sum(ratios) / len(ratios) if ratios else None
+    min_headroom = min(headrooms) if headrooms else None
+
+    score = 0
+    label = "ok"
+    if (min_headroom is not None and min_headroom >= 3.0) or (avg_ratio is not None and avg_ratio <= 0.35):
+        score += 80
+        label = "smooth"
+    elif (min_headroom is not None and min_headroom >= 2.0) or (avg_ratio is not None and avg_ratio <= 0.65):
+        score += 45
+        label = "stable"
+    elif (min_headroom is not None and min_headroom >= 1.25) or (avg_ratio is not None and avg_ratio <= 0.95):
+        score += 10
+        label = "ok"
+    else:
+        score -= 80
+        label = "buffer-risk"
+
+    if jitter_ms and jitter_ms > 2000:
+        score -= 35
+    elif jitter_ms and jitter_ms > 1000:
+        score -= 15
+    if len(usable) >= 2 and label in ("smooth", "stable"):
+        score += 10
+
+    return {
+        "smoothness_score": score,
+        "smoothness_label": label,
+        "segment_count": len(usable),
+        "segment_avg_ms": avg_ms,
+        "segment_jitter_ms": jitter_ms,
+        "buffer_headroom": round(min_headroom, 2) if min_headroom is not None else None,
+    }
+
+
+HLS_SMOOTHNESS_LABEL_RANK = {
+    "smooth": 0,
+    "stable": 1,
+    "ok": 2,
+    "unknown": 3,
+    "buffer-risk": 4,
+}
+
+
+def hls_smoothness_label_rank(label):
+    return HLS_SMOOTHNESS_LABEL_RANK.get(str(label or "unknown").lower(), HLS_SMOOTHNESS_LABEL_RANK["unknown"])
+
+
+def choose_best_hls_variant_smoothness(candidates):
+    candidates = [c for c in (candidates or []) if c and c.get("smoothness")]
+    if not candidates:
+        return None
+
+    def sort_key(candidate):
+        smoothness = candidate.get("smoothness") or {}
+        return (
+            0 if smoothness.get("selected_height") else 1,
+            hls_smoothness_label_rank(smoothness.get("smoothness_label")),
+            -int(smoothness.get("smoothness_score") or 0),
+            -int(smoothness.get("selected_height") or 0),
+            -int(smoothness.get("selected_bandwidth") or 0),
+        )
+
+    return sorted(candidates, key=sort_key)[0]
+
+
+def stream_reliability_rank(item):
+    probe = (item or {}).get("probe") or {}
+    if probe.get("backup") or probe.get("browser_candidate"):
+        return 8
+    label = str(probe.get("smoothness_label") or "unknown").lower()
+    if label == "smooth":
+        return 0
+    if label == "stable":
+        return 1
+    if label == "ok":
+        return 2
+    if label == "buffer-risk":
+        return 7
+    stream_type = (item or {}).get("stream_type")
+    if stream_type == "iframe":
+        return 3
+    if stream_type == "native":
+        return 4
+    if stream_type == "dash":
+        return 5
+    if stream_type == "hls":
+        return 6
+    return 6
+
+
+def filter_browser_candidates_when_primary_links_exist(items):
+    items = list(items or [])
+    primary = [item for item in items if not ((item.get("probe") or {}).get("browser_candidate"))]
+    return primary or items
 
 
 CLIENT_BROWSER_FAILURE_EXACT = {
@@ -3125,6 +3368,7 @@ def make_client_browser_candidate_probe(probe, stream_type, url=None, domain_hea
         status_code=probe.get("status_code") or probe.get("media_probe_status"),
         url=url,
         domain_health=domain_health,
+        smoothness_score=probe.get("smoothness_score"),
     )
     probe["score"] = max(20, score - 260)
     return probe
@@ -3304,6 +3548,58 @@ def playlist_uris(manifest_text):
     return uris
 
 
+HLS_SMOOTH_SEGMENT_SAMPLE_COUNT = 2
+HLS_SMOOTH_SEGMENT_MAX_BYTES = 256 * 1024
+
+
+def hls_variant_entries(manifest_text):
+    entries = []
+    pending = None
+    for line in (manifest_text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#EXT-X-STREAM-INF"):
+            pending = {}
+            bandwidth_match = re.search(r"BANDWIDTH=(\d+)", line, re.IGNORECASE)
+            height_match = re.search(r"RESOLUTION=\d+x(\d+)", line, re.IGNORECASE)
+            if bandwidth_match:
+                pending["bandwidth"] = int(bandwidth_match.group(1))
+            if height_match:
+                pending["height"] = int(height_match.group(1))
+            continue
+        if line.startswith("#"):
+            continue
+        if pending is not None:
+            entry = dict(pending)
+            entry["uri"] = line
+            entries.append(entry)
+            pending = None
+    return entries
+
+
+def hls_media_segments(playlist_text):
+    segments = []
+    duration = None
+    for line in (playlist_text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#EXTINF"):
+            try:
+                duration = float(line.split(":", 1)[1].split(",", 1)[0])
+            except Exception:
+                duration = None
+            continue
+        if line.startswith("#"):
+            continue
+        if line.lower().split("?", 1)[0].endswith(".m3u8"):
+            continue
+        segments.append({"uri": line, "duration": duration})
+        duration = None
+    return segments
+
+
 def is_vod_or_finished_hls(manifest_text):
     upper = (manifest_text or "").upper()
     return "#EXT-X-PLAYLIST-TYPE:VOD" in upper or "#EXT-X-ENDLIST" in upper
@@ -3316,64 +3612,108 @@ def response_looks_like_html(content_bytes, content_type=""):
     return sample.startswith((b"<!doctype html", b"<html", b"<script"))
 
 
-def probe_hls_segment(segment_url, headers):
+def probe_hls_segment(segment_url, headers, duration=None, bandwidth=None):
+    started = time.monotonic()
     response = requests.get(segment_url, headers=headers, timeout=8, stream=True, allow_redirects=True)
     status_code = response.status_code
     cors_ok = response_cors_ok(response)
     content_type = response.headers.get("content-type", "")
+    content_length = None
+    try:
+        content_length = int(response.headers.get("content-length") or 0) or None
+    except Exception:
+        content_length = None
     sample = b""
     try:
-        for chunk in response.iter_content(chunk_size=1024):
+        for chunk in response.iter_content(chunk_size=8192):
             if chunk:
                 sample += chunk
-            if len(sample) >= 2048:
+            if len(sample) >= HLS_SMOOTH_SEGMENT_MAX_BYTES:
                 break
     finally:
+        elapsed_ms = max(1, int((time.monotonic() - started) * 1000))
         response.close()
 
     if status_code not in (200, 206):
-        return False, f"hls-segment-http-{status_code}", status_code
+        return False, f"hls-segment-http-{status_code}", status_code, {}
     if not cors_ok:
-        return False, "hls-segment-cors-blocked", status_code
+        return False, "hls-segment-cors-blocked", status_code, {}
     if not sample:
-        return False, "hls-segment-empty", status_code
+        return False, "hls-segment-empty", status_code, {}
     if response_looks_like_html(sample, content_type):
-        return False, "hls-segment-html", status_code
-    return True, "hls-media-ok", status_code
+        return False, "hls-segment-html", status_code, {}
+
+    bytes_read = len(sample)
+    estimated_total_bytes = content_length or bytes_read
+    estimated_download_ms = int(elapsed_ms * (estimated_total_bytes / bytes_read)) if bytes_read else elapsed_ms
+    throughput_bps = int((bytes_read * 8) / (elapsed_ms / 1000)) if elapsed_ms > 0 else None
+    required_bps = bandwidth
+    if not required_bps and content_length and duration and duration > 0:
+        required_bps = int((estimated_total_bytes * 8) / duration)
+    headroom = (throughput_bps / required_bps) if throughput_bps and required_bps else None
+    download_ratio = (estimated_download_ms / (duration * 1000)) if content_length and duration and duration > 0 else None
+    sample_metrics = {
+        "ok": True,
+        "bytes_read": bytes_read,
+        "content_length": content_length,
+        "elapsed_ms": elapsed_ms,
+        "estimated_download_ms": estimated_download_ms,
+        "duration": duration,
+        "throughput_bps": throughput_bps,
+        "required_bps": required_bps,
+        "headroom": headroom,
+        "download_ratio": download_ratio,
+    }
+    return True, "hls-media-ok", status_code, sample_metrics
 
 
-def probe_hls_media_playlist(playlist_url, playlist_text, headers):
+def probe_hls_media_playlist(playlist_url, playlist_text, headers, bandwidth=None):
     if is_vod_or_finished_hls(playlist_text):
-        return False, "hls-vod-or-ended-playlist", None
+        return False, "hls-vod-or-ended-playlist", None, {}
     if "#EXTINF" not in playlist_text and "#EXT-X-MAP" not in playlist_text:
-        return False, "hls-no-media-segments", None
+        return False, "hls-no-media-segments", None, {}
 
     failures = []
-    for media_uri in playlist_uris(playlist_text)[:5]:
-        if media_uri.lower().split("?", 1)[0].endswith(".m3u8"):
-            continue
-        media_url = urljoin(playlist_url, media_uri)
-        ok, reason, status = probe_hls_segment(media_url, headers)
+    smooth_samples = []
+    for segment in hls_media_segments(playlist_text)[:5]:
+        media_url = urljoin(playlist_url, segment["uri"])
+        ok, reason, status, sample = probe_hls_segment(media_url, headers, duration=segment.get("duration"), bandwidth=bandwidth)
         if ok:
-            return True, reason, status
+            smooth_samples.append(sample)
+            if len(smooth_samples) >= HLS_SMOOTH_SEGMENT_SAMPLE_COUNT:
+                return True, reason, status, summarize_hls_smoothness(smooth_samples)
+            continue
         failures.append(reason)
-    return False, failures[-1] if failures else "hls-no-media-uri", None
+    if smooth_samples:
+        return True, "hls-media-ok", status, summarize_hls_smoothness(smooth_samples)
+    return False, failures[-1] if failures else "hls-no-media-uri", None, {}
 
 
-def probe_hls_media(manifest_url, manifest_text, headers):
+def probe_hls_media(manifest_url, manifest_text, headers, bandwidth=None):
     if is_vod_or_finished_hls(manifest_text):
-        return False, "hls-vod-or-ended-playlist", None
+        return False, "hls-vod-or-ended-playlist", None, {}
 
     first_uri = first_playlist_uri(manifest_text)
     if not first_uri:
-        return False, "hls-no-media-uri", None
+        return False, "hls-no-media-uri", None, {}
 
     if "#EXT-X-STREAM-INF" not in manifest_text:
-        return probe_hls_media_playlist(manifest_url, manifest_text, headers)
+        return probe_hls_media_playlist(manifest_url, manifest_text, headers, bandwidth=bandwidth)
 
     failures = []
-    for variant_uri in playlist_uris(manifest_text)[:5]:
-        child_url = urljoin(manifest_url, variant_uri)
+    playable_variants = []
+    variant_entries = hls_variant_entries(manifest_text) or [{"uri": uri, "bandwidth": bandwidth} for uri in playlist_uris(manifest_text)]
+    variant_entries.sort(key=lambda item: int(item.get("bandwidth") or 0), reverse=True)
+    if len(variant_entries) > 6:
+        probe_variants = variant_entries[:3] + variant_entries[-3:]
+    else:
+        probe_variants = variant_entries
+    seen_variant_uris = set()
+    for variant in probe_variants:
+        if variant.get("uri") in seen_variant_uris:
+            continue
+        seen_variant_uris.add(variant.get("uri"))
+        child_url = urljoin(manifest_url, variant["uri"])
         response = requests.get(child_url, headers=headers, timeout=8, stream=True, allow_redirects=True)
         status_code = response.status_code
         cors_ok = response_cors_ok(response)
@@ -3391,12 +3731,30 @@ def probe_hls_media(manifest_url, manifest_text, headers):
         if not content.lstrip().startswith("#EXTM3U"):
             failures.append("hls-child-invalid-manifest")
             continue
-        media_ok, media_reason, media_status = probe_hls_media_playlist(child_url, content, headers)
+        media_ok, media_reason, media_status, smoothness = probe_hls_media_playlist(
+            child_url,
+            content,
+            headers,
+            bandwidth=variant.get("bandwidth") or bandwidth,
+        )
         if media_ok:
-            return True, media_reason, media_status
+            smoothness = dict(smoothness or {})
+            smoothness["selected_variant_uri"] = variant.get("uri")
+            smoothness["selected_height"] = variant.get("height")
+            smoothness["selected_bandwidth"] = variant.get("bandwidth") or bandwidth
+            playable_variants.append({
+                "reason": media_reason,
+                "status": media_status,
+                "smoothness": smoothness,
+            })
+            continue
         failures.append(media_reason)
 
-    return False, failures[-1] if failures else "hls-no-playable-variant", None
+    selected = choose_best_hls_variant_smoothness(playable_variants)
+    if selected:
+        return True, selected["reason"], selected["status"], selected["smoothness"]
+
+    return False, failures[-1] if failures else "hls-no-playable-variant", None, {}
 
 
 def dash_manifest_kids(manifest_text):
@@ -3470,6 +3828,12 @@ def probe_stream_url(url, stream_type, clear_keys=None, domain_health=None, refe
         "cors_ok": None,
         "backup": False,
         "is_vod": False,
+        "smoothness_score": 0,
+        "smoothness_label": "unknown",
+        "segment_count": 0,
+        "segment_avg_ms": None,
+        "segment_jitter_ms": None,
+        "buffer_headroom": None,
     }
     if not url.startswith("http"):
         result["error"] = "non-http-url"
@@ -3590,13 +3954,26 @@ def probe_stream_url(url, stream_type, clear_keys=None, domain_health=None, refe
                 result["validation_reason"] = f"raw-website-signals:{raw_signal_count}"
                 return result
 
+        quality = parse_manifest_quality(manifest_text, stream_type)
+        result.update(quality)
+
         if stream_type == "hls":
             if not manifest_text.lstrip().startswith("#EXTM3U"):
                 result["error"] = "html-instead-of-hls-manifest"
                 result["validation_reason"] = result["error"]
                 return result
-            media_ok, media_reason, media_status = probe_hls_media(r.url, manifest_text, headers)
+            media_ok, media_reason, media_status, smoothness = probe_hls_media(
+                r.url,
+                manifest_text,
+                headers,
+                bandwidth=result.get("bandwidth"),
+            )
             result["media_probe_status"] = media_status
+            result.update(smoothness or {})
+            if result.get("selected_height"):
+                result["height"] = result["selected_height"]
+            if result.get("selected_bandwidth"):
+                result["bandwidth"] = result["selected_bandwidth"]
             if not media_ok:
                 result["error"] = media_reason
                 result["validation_reason"] = media_reason
@@ -3623,8 +4000,7 @@ def probe_stream_url(url, stream_type, clear_keys=None, domain_health=None, refe
             if not result["validation_reason"]:
                 result["validation_reason"] = init_reason
 
-        quality = parse_manifest_quality(manifest_text, stream_type)
-        result.update(quality)
+        apply_playback_risk_override(url, result)
         result["working"] = True
         result["validation_status"] = "ok"
         result["score"] = score_stream_probe(
@@ -3635,6 +4011,7 @@ def probe_stream_url(url, stream_type, clear_keys=None, domain_health=None, refe
             status_code=result["status_code"],
             url=url,
             domain_health=domain_health,
+            smoothness_score=result.get("smoothness_score"),
         )
         if result["backup"]:
             result["score"] -= 180
@@ -4136,6 +4513,10 @@ def main():
                     badges.append("backup")
                 if probe.get("browser_candidate"):
                     badges.append("client")
+                if probe.get("smoothness_label") in ("smooth", "stable"):
+                    badges.append("smooth")
+                elif probe.get("smoothness_label") == "buffer-risk":
+                    badges.append("risk")
                     
                 badges = list(dict.fromkeys(badges))
                 
@@ -4160,6 +4541,12 @@ def main():
                     meta_parts.append("Backup")
                 if probe.get("browser_candidate"):
                     meta_parts.append("Client Browser Candidate")
+                if probe.get("smoothness_label") in ("smooth", "stable"):
+                    meta_parts.append("Smooth")
+                elif probe.get("smoothness_label") == "buffer-risk":
+                    meta_parts.append("Buffer Risk")
+                if probe.get("buffer_headroom"):
+                    meta_parts.append(f"{probe['buffer_headroom']}x Headroom")
                 
                 if "eng" in badges:
                     meta_parts.append("English Audio")
@@ -4183,8 +4570,10 @@ def main():
                     "score": probe.get("score", 0)
                 })
 
-        # Sort by playback policy: prioritize stable iframe (embed) and dash streams first
-        # to prevent HLS auto-switching issues in the top links.
+        resolved_items = filter_browser_candidates_when_primary_links_exist(resolved_items)
+
+        # Sort by reliability first: smooth segment probes and domain history feed the
+        # score, while server-only/browser candidates remain last-resort backup links.
         def get_type_priority(item):
             if (item.get("probe") or {}).get("backup"):
                 return 5
@@ -4199,7 +4588,11 @@ def main():
                 return 3
             return 4
 
-        resolved_items.sort(key=lambda item: (get_type_priority(item), -int(item.get("score") or 0)))
+        resolved_items.sort(key=lambda item: (
+            stream_reliability_rank(item),
+            -int(item.get("score") or 0),
+            get_type_priority(item),
+        ))
         resolved_items = resolved_items[:20]
 
         # Label and build the final STREAM_LINKS array
@@ -4239,6 +4632,9 @@ def main():
                 "height": (item.get("probe") or {}).get("height"),
                 "validationStatus": (item.get("probe") or {}).get("validation_status"),
                 "validationReason": (item.get("probe") or {}).get("validation_reason"),
+                "smoothnessScore": (item.get("probe") or {}).get("smoothness_score"),
+                "smoothnessLabel": (item.get("probe") or {}).get("smoothness_label"),
+                "bufferHeadroom": (item.get("probe") or {}).get("buffer_headroom"),
             }
             if (item.get("probe") or {}).get("browser_candidate"):
                 js_obj["browserCandidate"] = True
