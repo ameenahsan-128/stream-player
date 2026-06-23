@@ -1737,14 +1737,11 @@ function loadHLS(url, onSuccess, onFail) {
         return;
       }
       if (data && data.fatal) {
+        playbackStarted = false;
         ovLoadMsg.textContent = `HLS load recovery ${hlsLoadErrors}/${HLS_LOAD_ERROR_FAILOVER_LIMIT}...`;
         setStatus('buffer', 'Recovering HLS load...');
         hlsInstance.startLoad();
-        if (playbackStarted) {
-          startStallWatchdog(playbackAttemptId, 'HLS load errors detected. Trying next HLS link...', Math.min(HLS_STALL_TIMEOUT_MS, 5000));
-        } else {
-          startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
-        }
+        startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
         return;
       }
       if (playbackStarted) {
@@ -1755,6 +1752,7 @@ function loadHLS(url, onSuccess, onFail) {
     if (data.fatal) {
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < HLS_MAX_NETWORK_RECOVERIES) {
         networkRecoveries += 1;
+        playbackStarted = false;
         ovLoadMsg.textContent = `HLS network recovery ${networkRecoveries}/${HLS_MAX_NETWORK_RECOVERIES}...`;
         setStatus('buffer', 'Recovering HLS network...');
         hlsInstance.startLoad();
@@ -1763,9 +1761,11 @@ function loadHLS(url, onSuccess, onFail) {
       }
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < HLS_MAX_MEDIA_RECOVERIES) {
         mediaRecoveries += 1;
+        playbackStarted = false;
         ovLoadMsg.textContent = `HLS media recovery ${mediaRecoveries}/${HLS_MAX_MEDIA_RECOVERIES}...`;
         setStatus('buffer', 'Recovering HLS media...');
         hlsInstance.recoverMediaError();
+        try { video.play().catch(() => {}); } catch(e) {}
         startStartupWatchdog(attemptId, HLS_PLAYBACK_TIMEOUT_MS, hlsFailureText());
         return;
       }
