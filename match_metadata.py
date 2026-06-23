@@ -43,6 +43,7 @@ RESULT_FINAL_MARKERS = (
     "(ft)",
     "eventcompleted",
     "match ended",
+    "report",
 )
 
 RESULT_LIVE_MARKERS = (
@@ -350,26 +351,79 @@ def result_from_scores(match, score1, score2, status, source_url, checked_at):
 
 
 def find_score_near_teams(text, match):
-    team1 = re.escape(key_text(match.get("team1")))
-    team2 = re.escape(key_text(match.get("team2")))
+    team1 = key_text(match.get("team1"))
+    team2 = key_text(match.get("team2"))
+    if not team1 or not team2:
+        return None
+
     folded = ascii_fold(text).lower()
+    folded = folded.replace("\u2013", "-").replace("\u2014", "-")
     folded = re.sub(r"[^a-z0-9:\-,]+", " ", folded)
     folded = re.sub(r"\s+", " ", folded).strip()
-    patterns = [
-        rf"{team1}.{{0,80}}?(\d{{1,2}})\s*[-:]\s*(\d{{1,2}}).{{0,80}}?{team2}",
-        rf"{team2}.{{0,80}}?(\d{{1,2}})\s*[-:]\s*(\d{{1,2}}).{{0,80}}?{team1}",
-        rf"{team1}\s+(\d{{1,2}})\s*,\s*{team2}\s+(\d{{1,2}})",
-        rf"{team2}\s+(\d{{1,2}})\s*,\s*{team1}\s+(\d{{1,2}})",
+
+    t1_indices = [m.start() for m in re.finditer(re.escape(team1), folded)]
+    t2_indices = [m.start() for m in re.finditer(re.escape(team2), folded)]
+    if not t1_indices or not t2_indices:
+        return None
+
+    best_candidate = None
+    min_dist = 999999
+
+    for m in re.finditer(r"\b(\d{1,2})\s*[-:]\s*(\d{1,2})\b", folded):
+        score_start, score_end = m.span()
+        val1, val2 = int(m.group(1)), int(m.group(2))
+
+        # Check if team1 and team2 are near this score (within 100 chars)
+        t1_close = [idx for idx in t1_indices if abs(idx - score_start) <= 100]
+        t2_close = [idx for idx in t2_indices if abs(idx - score_start) <= 100]
+
+        if t1_close and t2_close:
+            d1 = min(abs(idx - score_start) for idx in t1_close)
+            d2 = min(abs(idx - score_start) for idx in t2_close)
+            dist = d1 + d2
+
+            # Filter out dates (e.g. 2026-06-22)
+            pre_text = folded[max(0, score_start - 5):score_start]
+            post_text = folded[score_end:min(len(folded), score_end + 5)]
+            is_date = False
+            if re.search(r"\b(19|20)\d{2}-?$", pre_text) or re.search(r"^[-?]?(19|20)\d{2}\b", post_text):
+                is_date = True
+
+            if not is_date and dist < min_dist:
+                min_dist = dist
+                closest_t1 = min(t1_close, key=lambda idx: abs(idx - score_start))
+                closest_t2 = min(t2_close, key=lambda idx: abs(idx - score_start))
+
+                snippet = folded[max(0, score_start - 120):score_end + 120]
+                if closest_t1 < score_start < closest_t2:
+                    best_candidate = (val1, val2, snippet)
+                elif closest_t2 < score_start < closest_t1:
+                    best_candidate = (val2, val1, snippet)
+                else:
+                    if closest_t1 < closest_t2:
+                        best_candidate = (val1, val2, snippet)
+                    else:
+                        best_candidate = (val2, val1, snippet)
+
+    if best_candidate:
+        return best_candidate
+
+    # Fallback to comma-separated format, e.g. "team1 1, team2 2"
+    t1_esc = re.escape(team1)
+    t2_esc = re.escape(team2)
+    fallback_patterns = [
+        rf"{t1_esc}\s+(\d{{1,2}})\s*,\s*{t2_esc}\s+(\d{{1,2}})",
+        rf"{t2_esc}\s+(\d{{1,2}})\s*,\s*{t1_esc}\s+(\d{{1,2}})",
     ]
-    for idx, pattern in enumerate(patterns):
+    for idx, pattern in enumerate(fallback_patterns):
         match_obj = re.search(pattern, folded)
-        if not match_obj:
-            continue
-        first, second = int(match_obj.group(1)), int(match_obj.group(2))
-        snippet = folded[max(0, match_obj.start() - 120):match_obj.end() + 120]
-        if idx in (0, 2):
-            return first, second, snippet
-        return second, first, snippet
+        if match_obj:
+            first, second = int(match_obj.group(1)), int(match_obj.group(2))
+            snippet = folded[max(0, match_obj.start() - 120):match_obj.end() + 120]
+            if idx == 0:
+                return first, second, snippet
+            return second, first, snippet
+
     return None
 
 
