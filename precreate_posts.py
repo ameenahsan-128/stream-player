@@ -4,6 +4,40 @@ import sys
 import json
 import time
 import requests
+import time
+
+_orig_request = requests.request
+
+def retrying_request(method, url, **kwargs):
+    max_retries = 3
+    backoff_factor = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = _orig_request(method, url, **kwargs)
+            if response.status_code == 429:
+                body = response.text or ""
+                is_daily = "per day" in body.lower()
+                if not is_daily and attempt < max_retries:
+                    sleep_time = 15 * attempt
+                    print(f"[!] Hit per-minute 429 rate limit. Retrying in {sleep_time}s (attempt {attempt}/{max_retries})...")
+                    time.sleep(sleep_time)
+                    continue
+            if response.status_code in (502, 503, 504) and attempt < max_retries:
+                sleep_time = backoff_factor ** attempt
+                print(f"[!] Server error {response.status_code}. Retrying in {sleep_time}s (attempt {attempt}/{max_retries})...")
+                time.sleep(sleep_time)
+                continue
+            return response
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            if attempt < max_retries:
+                sleep_time = backoff_factor ** attempt
+                print(f"[!] Network error: {exc}. Retrying in {sleep_time}s (attempt {attempt}/{max_retries})...")
+                time.sleep(sleep_time)
+            else:
+                raise
+
+requests.request = retrying_request
+
 import math
 from datetime import datetime, timedelta, timezone
 import re

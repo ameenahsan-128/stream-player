@@ -50,6 +50,107 @@ def load_fixture_api(url):
     return data, f"api:{url}"
 
 
+def parse_time_with_offset(date_str, time_text):
+    import re
+    time_text = time_text.replace("−", "-").replace(" ", "")
+    time_match = re.search(r"(\d+:\d+)\s*(a\.m\.|p\.m\.|am|pm)?", time_text, re.IGNORECASE)
+    if not time_match:
+        return None
+    time_val = time_match.group(1)
+    ampm = time_match.group(2)
+    offset_match = re.search(r"UTC([-+]\d+(?::\d+)?)", time_text)
+    offset_hours = 0
+    offset_minutes = 0
+    if offset_match:
+        offset_str = offset_match.group(1)
+        if ":" in offset_str:
+            parts = offset_str.split(":")
+            offset_hours = int(parts[0])
+            offset_minutes = int(parts[1]) if parts[0].startswith("-") else -int(parts[1])
+        else:
+            offset_hours = int(offset_str)
+    hour, minute = map(int, time_val.split(":"))
+    if ampm:
+        ampm = ampm.lower().replace(".", "")
+        if ampm == "pm" and hour < 12:
+            hour += 12
+        elif ampm == "am" and hour == 12:
+            hour = 0
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    dt = dt.replace(hour=hour, minute=minute)
+    dt_utc = dt - timedelta(hours=offset_hours, minutes=offset_minutes)
+    return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def load_wikipedia_fixtures():
+    from bs4 import BeautifulSoup
+    groups = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L']
+    all_fixtures = []
+    headers = {'User-Agent': 'Mozilla/5.0 (compatible; stream-fixture-builder/1.0)'}
+    checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    print("[*] Scraping matches from Wikipedia Groups A-L...")
+    for group in groups:
+        url = f"https://en.wikipedia.org/wiki/2026_FIFA_World_Cup_Group_{group}"
+        try:
+            r = requests.get(url, headers=headers, timeout=15)
+            r.raise_for_status()
+        except Exception as e:
+            print(f"[!] Failed to fetch Group {group}: {e}")
+            continue
+        soup = BeautifulSoup(r.text, 'html.parser')
+        boxes = soup.find_all(class_='footballbox')
+        for box in boxes:
+            fhome = box.find(class_='fhome')
+            team1 = fhome.get_text(strip=True) if fhome else ""
+            faway = box.find(class_='faway')
+            team2 = faway.get_text(strip=True) if faway else ""
+            fdate_span = box.find(class_='bday')
+            date_str = fdate_span.get_text(strip=True) if fdate_span else ""
+            ftime_div = box.find(class_='ftime')
+            time_text = ftime_div.get_text(strip=True) if ftime_div else ""
+            fright = box.find(class_='fright')
+            venue = ""
+            if fright:
+                loc_div = fright.find(itemprop='location') or fright.find(itemtype='http://schema.org/Place')
+                if loc_div:
+                    venue = loc_div.get_text(strip=True)
+            match_time = parse_time_with_offset(date_str, time_text)
+            if not match_time:
+                continue
+            raw_item = {
+                "competition": "FIFA World Cup 2026",
+                "season": "2026",
+                "stage": "Group Stage",
+                "group": group,
+                "team1": team1,
+                "team2": team2,
+                "match_time": match_time,
+                "venue": venue,
+                "fixture_source": "manual-wikipedia",
+                "fixture_source_url": url
+            }
+            all_fixtures.append(raw_item)
+            
+    if not all_fixtures:
+        raise ValueError("No fixtures were successfully scraped from Wikipedia.")
+        
+    print(f"[+] Wikipedia scrape complete. Scraped {len(all_fixtures)} fixtures.")
+    
+    # Cache to file
+    try:
+        output_path = "data/fixtures/worldcup_2026.json"
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        if len(all_fixtures) >= 60:
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump({"fixtures": all_fixtures}, f, indent=2)
+            print(f"[+] Cached Wikipedia fixtures written to {output_path}")
+    except Exception as ex:
+        print(f"[!] Failed to write cached fixtures: {ex}")
+        
+    return all_fixtures, "wikipedia_scraper"
+
+
 def load_fixture_source(api_config, fixture_file_override=None):
     provider = str(api_config.get("provider") or "local_file").strip().lower()
     fixture_file = fixture_file_override or api_config.get("fixture_file")
@@ -67,6 +168,17 @@ def load_fixture_source(api_config, fixture_file_override=None):
                 print(f"[!] Fixture API fetch failed: {exc}")
         else:
             print("[!] HTTP fixture API is configured but allow_http_api is false; skipping API fetch.")
+    elif provider in ("wikipedia", "wikipedia_scraper", "wiki"):
+        try:
+            return load_wikipedia_fixtures()
+        except Exception as exc:
+            print(f"[!] Wikipedia fixture scraper failed: {exc}")
+            if fixture_file and os.path.exists(fixture_file):
+                print("[*] Falling back to local fixture file...")
+                try:
+                    return load_fixture_file(fixture_file)
+                except Exception as fe:
+                    print(f"[!] Local fixture fallback also failed: {fe}")
     else:
         print(f"[!] Unknown fixture provider '{provider}'.")
 
