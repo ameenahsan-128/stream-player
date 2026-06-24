@@ -696,10 +696,6 @@ def render_result_banner(ctx, match):
 
 
 def render_countdown(match, safe_name):
-    if str(match.get("status") or "").lower() in ("completed", "ended"):
-        return ""
-    if result_info(match).get("status") in ("final", "final_unverified"):
-        return ""
     kickoff = str(match.get("match_time") or "").strip()
     if not kickoff:
         return ""
@@ -974,16 +970,11 @@ def render_lineup_table(ctx, match):
     text_html = render_lineup_paragraphs(text)
     if not text_html:
         text_html = '<p style="margin:6px 0;"><b>Lineup information will be updated when available.</b></p>'
-    score = result_info(match)
-    score_header = score.get("label", "Score Prediction").upper()
-    score_text = score.get("text") or f"{ctx['team1']} vs {ctx['team2']} - Prediction will be updated close to kickoff."
     return f"""
   <table border="0" cellpadding="0" cellspacing="0" style="background-color:white; border-collapse:collapse; border:1px solid #000000; color:black; text-align:center; width:100%; margin:0;">
     <tbody>
       <tr><td colspan="2" style="background:#006600; border:1px solid #000000; padding:8px;"><span style="color:white; font-size:medium; font-weight:bold;">{header}</span></td></tr>
       <tr><td colspan="2" style="border:1px solid #000000; padding:14px; text-align:left; line-height:1.65; font-size:14px;">{text_html}</td></tr>
-      <tr><td colspan="2" style="background:#006600; border:1px solid #000000; padding:8px;"><span style="color:white; font-size:medium; font-weight:bold;">{escape(score_header)}</span></td></tr>
-      <tr><td colspan="2" style="border:1px solid #000000; padding:12px;"><b>{escape(score_text)}</b></td></tr>
     </tbody>
   </table>
 """
@@ -1034,6 +1025,7 @@ def render_lineup_paragraphs(text):
 def render_preview_post(config, match):
     ctx = get_match_context(config, match)
     image_html = render_thumbnail_image(ctx)
+    countdown_html = render_countdown(match, slugify_match_name(ctx["match_name"]))
     jump_break = '<a name="more"></a>'
     hero_html = image_html + f"\n{jump_break}\n" if image_html else f"{jump_break}\n"
     cta_html = f"""
@@ -1041,7 +1033,7 @@ def render_preview_post(config, match):
 """
     body = f"""
   {portal_row(render_match_table(ctx, include_channels=False), padding="0")}
-  {portal_row(render_result_banner(ctx, match), padding="10px")}
+  {portal_row(countdown_html, padding="10px")}
   {portal_row(render_lineup_table(ctx, match), padding="0")}
   {portal_text_row("Match Preview", [
       f"{ctx['team1']} vs {ctx['team2']} is scheduled for {ctx['date']} at {ctx['time']}, bringing together two sides with very different strengths.",
@@ -1091,7 +1083,6 @@ def render_streaming_page(config, match, state="upcoming", links_html=""):
     ctx = get_match_context(config, match)
     image_html = render_page_hero_image(config, match, ctx)
     countdown_html = render_countdown(match, slugify_match_name(ctx["match_name"]))
-    result_html = render_result_banner(ctx, match)
     link_notice = f"""
   <div style="background:#fff7d6; border:2px solid #f4c430; color:#111111; border-radius:6px; padding:13px 14px; margin:0 0 14px; text-align:center; font-weight:900; line-height:1.5; text-transform:uppercase;">
     {escape(ctx["team1"])} vs {escape(ctx["team2"])} match links are added 15 minutes prior to kickoff.
@@ -1114,11 +1105,9 @@ def render_streaming_page(config, match, state="upcoming", links_html=""):
   </div>
 """
     elif state == "ended":
-        ended_score = result_html or '<div style="font-weight:900;">Final score will be updated after verification.</div>'
         stream_block = f"""
   <div id="player-frame-container" style="background:#f5f5f5; border:1px solid #dddddd; border-radius:6px; padding:20px; margin:18px 0; text-align:center; color:#555555; font-weight:800;">
     Match coverage has ended.
-    {ended_score}
   </div>
 """
     else:
@@ -1133,7 +1122,6 @@ def render_streaming_page(config, match, state="upcoming", links_html=""):
   {portal_header_row("Match Coverage")}
   {portal_row(f'<div style="font-size:14px; line-height:1.6; color:#444444;">{escape(ctx["match_name"])} coverage page with broadcast information and streaming buttons when active.</div>', padding="10px")}
   {portal_row(render_channel_country_table(ctx, match, config), padding="0")}
-  {portal_row(result_html, padding="10px")}
   {portal_row(render_square_ad(config), padding="12px")}
   {portal_header_row("Streaming Links", bg="#000000")}
   {portal_row(countdown_html + stream_block, padding="12px")}
