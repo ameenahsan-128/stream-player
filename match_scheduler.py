@@ -1619,7 +1619,37 @@ def check_and_run():
     else:
         print("[*] Source prediction is disabled via configuration.")
 
-    for match in schedule:
+    # Determine priority teams from configuration to prioritize processing order
+    priority_teams = []
+    if new_config:
+        priority_teams = [
+            str(t).strip().lower()
+            for t in (
+                (new_config.get("prominent_team_priority") or [])
+                + (new_config.get("title_priority_teams") or [])
+                + (new_config.get("priority_teams") or [])
+            )
+            if t
+        ]
+
+    def get_match_sort_key(m):
+        try:
+            m_time = parse_time(m["match_time"])
+        except Exception:
+            m_time = datetime.max.replace(tzinfo=timezone.utc)
+        
+        has_priority = 0
+        m_name_lower = m.get("match_name", "").lower()
+        for pt in priority_teams:
+            if pt in m_name_lower:
+                has_priority = 1
+                break
+        
+        # Sort by match time (ascending), then by priority (descending, so -1 first)
+        return (m_time, -has_priority)
+
+    sorted_schedule = sorted(schedule, key=get_match_sort_key)
+    for match in sorted_schedule:
         status = match.get("status", "pending")
         if status in ("completed", "review", "failed"):
             continue

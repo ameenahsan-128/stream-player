@@ -913,6 +913,24 @@ ins.adsbygoogle, .google-auto-placed, #google_image_div, [id^="google_ads_iframe
     var robotOverlays = document.querySelectorAll('[class*="pl-66f11775fe2744312299821ac71b38f1__"], [class*="pl-"][class*="__"]');
     robotOverlays.forEach(function(o) {{ o.remove(); }});
   }}, 200);
+
+  // Auto-redirect to stream player if ?link=N parameter is present
+  try {{
+    var params = new URLSearchParams(window.location.search);
+    var linkNum = params.get('link') || params.get('stream');
+    if (linkNum) {{
+      var btns = document.querySelectorAll('a.stream-btn');
+      for (var i = 0; i < btns.length; i++) {{
+        var href = btns[i].href;
+        if (href.indexOf('link=' + linkNum) !== -1 || href.indexOf('?link=' + linkNum) !== -1) {{
+          window.location.href = href;
+          break;
+        }}
+      }}
+    }}
+  }} catch(e) {{
+    console.error("Auto-redirect error:", e);
+  }}
 }})();
 </script>
 <table border="0" cellpadding="0" cellspacing="0" style="font-family:Ubuntu, Poppins, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background:#ffffff; border-collapse:collapse; border:1px solid #000000; color:#222222; margin:12px auto; max-width:760px; width:100%; box-sizing:border-box;">

@@ -50,7 +50,7 @@ def load_fixture_api(url):
     return data, f"api:{url}"
 
 
-def parse_time_with_offset(date_str, time_text):
+def parse_time_with_offset(date_str, time_text, default_offset_hours=0):
     import re
     time_text = time_text.replace("−", "-").replace(" ", "")
     time_match = re.search(r"(\d+:\d+)\s*(a\.m\.|p\.m\.|am|pm)?", time_text, re.IGNORECASE)
@@ -59,7 +59,7 @@ def parse_time_with_offset(date_str, time_text):
     time_val = time_match.group(1)
     ampm = time_match.group(2)
     offset_match = re.search(r"UTC([-+]\d+(?::\d+)?)", time_text)
-    offset_hours = 0
+    offset_hours = default_offset_hours
     offset_minutes = 0
     if offset_match:
         offset_str = offset_match.group(1)
@@ -100,6 +100,23 @@ def load_wikipedia_fixtures():
             print(f"[!] Failed to fetch Group {group}: {e}")
             continue
         soup = BeautifulSoup(r.text, 'html.parser')
+        
+        # Determine group timezone offset fallback from page text (e.g. UTC-4 or UTC-7)
+        import re as regex
+        default_offset = 0
+        matches_h2 = soup.find(id='Matches') or soup.find(id='Matches_2')
+        if matches_h2:
+            sibling = matches_h2.parent.find_next_sibling()
+            for _ in range(5):
+                if not sibling or 'footballbox' in sibling.get('class', []):
+                    break
+                text = sibling.get_text()
+                tz_match = regex.search(r"UTC([-+]\d+)", text.replace("−", "-").replace(" ", ""))
+                if tz_match:
+                    default_offset = int(tz_match.group(1))
+                    break
+                sibling = sibling.find_next_sibling()
+
         boxes = soup.find_all(class_='footballbox')
         for box in boxes:
             fhome = box.find(class_='fhome')
@@ -116,7 +133,7 @@ def load_wikipedia_fixtures():
                 loc_div = fright.find(itemprop='location') or fright.find(itemtype='http://schema.org/Place')
                 if loc_div:
                     venue = loc_div.get_text(strip=True)
-            match_time = parse_time_with_offset(date_str, time_text)
+            match_time = parse_time_with_offset(date_str, time_text, default_offset_hours=default_offset)
             if not match_time:
                 continue
             raw_item = {
