@@ -33,6 +33,7 @@ from html import escape, unescape
 from io import BytesIO
 from urllib.parse import quote
 
+import email.utils
 import requests
 
 # ─── Constants ───────────────────────────────────────────────────────────────
@@ -226,18 +227,78 @@ def _safe_url(url):
     return quote(url, safe=":/?&=%#@+!$,;'()*[]")
 
 
+def parse_pubdate(pubdate_str):
+    if not pubdate_str:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    pubdate_str = pubdate_str.strip()
+    
+    dt = None
+    # Try RFC 2822 (standard RSS)
+    try:
+        dt = email.utils.parsedate_to_datetime(pubdate_str)
+    except Exception:
+        pass
+        
+    # Try ISO 8601 (Atom)
+    if not dt:
+        try:
+            val = pubdate_str
+            if val.endswith('Z'):
+                val = val[:-1] + '+00:00'
+            dt = datetime.fromisoformat(val)
+        except Exception:
+            pass
+            
+    # Try other common formats
+    if not dt:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                dt = datetime.strptime(pubdate_str, fmt)
+                break
+            except Exception:
+                pass
+                
+    if not dt:
+        return datetime.min.replace(tzinfo=timezone.utc)
+        
+    # Force offset-aware to UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+        
+    return dt
+
+
 def gather_top_football_news(max_total=8):
-    """Gather headlines from multiple RSS feeds, deduplicate by title."""
+    """Gather headlines from multiple RSS feeds, sort by date, and deduplicate."""
+    raw_items = []
+    for feed in RSS_FEEDS:
+        # Fetch up to 10 items from each feed to get a larger pool
+        items = fetch_rss_items(feed, max_items=10)
+        raw_items.extend(items)
+        
+    # Parse publication dates
+    parsed_items = []
+    for item in raw_items:
+        dt = parse_pubdate(item.get("pubdate"))
+        parsed_items.append((dt, item))
+        
+    # Sort by datetime descending (newest first)
+    parsed_items.sort(key=lambda x: x[0], reverse=True)
+    
+    # Deduplicate while preserving newest order
     seen = set()
     all_items = []
-    for feed in RSS_FEEDS:
-        items = fetch_rss_items(feed, max_items=4)
-        for item in items:
-            key = item["title"].lower()[:60]
-            if key not in seen and len(all_items) < max_total:
-                seen.add(key)
-                all_items.append(item)
-    log(f"Gathered {len(all_items)} news items from RSS feeds")
+    for dt, item in parsed_items:
+        key = item["title"].lower()[:60]
+        # Clean title key to avoid minor difference duplicates
+        key = re.sub(r'[^a-z0-9]', '', key)
+        if key not in seen and len(all_items) < max_total:
+            seen.add(key)
+            all_items.append(item)
+            
+    log(f"Gathered {len(all_items)} newest news items from RSS feeds")
     return all_items
 
 
