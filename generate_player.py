@@ -346,12 +346,14 @@ class EpicLinkParser(HTMLParser):
             for attr_name in ("class", "id"):
                 if attr_name in attr_dict:
                     val = attr_dict[attr_name].lower()
-                    if any(kw in val for kw in ("sidebar", "widget", "related", "popular", "menu", "navbar", "comment", "footer", "header")):
+                    if any(kw in val for kw in ("sidebar", "related", "popular", "menu", "navbar", "comment", "footer", "header")):
                         if not ("blog" in val or "post" in val):
                             is_ignored_container = True
                             break
         
-        self.open_tags.append((tag, is_ignored_container, is_whitelisted))
+        self_closing = {"meta", "link", "img", "br", "input", "hr", "embed", "base", "area", "col", "source", "track", "wbr"}
+        if tag not in self_closing:
+            self.open_tags.append((tag, is_ignored_container, is_whitelisted))
             
         if tag in ("a", "button", "iframe"):
             self.current_tag = tag
