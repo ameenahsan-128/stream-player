@@ -116,19 +116,29 @@ async def fetch_page_with_browser(url, timeout_ms=25000):
 
 def fetch_page_with_browser_sync(url, timeout_ms=25000):
     """Synchronous wrapper for the async browser fetch."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                html, success = pool.submit(
-                    lambda: asyncio.run(fetch_page_with_browser(url, timeout_ms))
-                ).result(timeout=timeout_ms // 1000 + 10)
-            return html, success
-        else:
-            return loop.run_until_complete(fetch_page_with_browser(url, timeout_ms))
-    except Exception:
-        return asyncio.run(fetch_page_with_browser(url, timeout_ms))
+    timeout_sec = (timeout_ms // 1000) + 10
+    
+    def worker():
+        try:
+            return asyncio.run(fetch_page_with_browser(url, timeout_ms))
+        except Exception as e:
+            print(f"[-] asyncio.run failed in browser fetch thread: {e}", file=sys.stderr)
+            return None, False
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(worker)
+        try:
+            res = future.result(timeout=timeout_sec)
+            if res is not None:
+                return res
+            return None, False
+        except concurrent.futures.TimeoutError:
+            print(f"[-] Browser fetch timed out after {timeout_sec} seconds for {url}", file=sys.stderr)
+            return None, False
+        except Exception as e:
+            print(f"[-] Browser fetch failed with exception: {e}", file=sys.stderr)
+            return None, False
 
 def fetch_page_html(url, headers=None, use_browser=False, timeout=15):
     """Unified page fetcher: tries browser (Crawl4AI) first if enabled, falls back to requests.

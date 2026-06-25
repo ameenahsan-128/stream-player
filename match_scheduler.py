@@ -1900,7 +1900,7 @@ def check_and_run():
                     print(f"[*] Scraping {sources[0]}...")
                 try:
                     cmd = ["python3", "generate_player.py"] + src_arg + ["-o", temp_output, "-t", match["match_name"]]
-                    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    res = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=240)
                     print(f"[+] Scraping successful. Generated {temp_output}")
                     match["scrape_fail_count"] = 0  # Reset failure counter on success
                     mark_source_success(match, sources)
