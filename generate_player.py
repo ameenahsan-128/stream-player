@@ -1205,15 +1205,22 @@ function sortAndRebuildLinks() {
     if (a.success && !b.success) return -1;
     if (!a.success && b.success) return 1;
 
-    // 4. Reliability tier beats raw score. This prevents a high-resolution DASH
-    // link with unknown/risky smoothness from staying above a measured stable link.
+    // 4. Prioritize by type: HLS (0) > iframe (1) > dash (2) > native (3) > other (4)
+    const typeOrder = { hls: 0, iframe: 1, dash: 2, native: 3 };
+    const orderA = typeOrder[a.type] !== undefined ? typeOrder[a.type] : 4;
+    const orderB = typeOrder[b.type] !== undefined ? typeOrder[b.type] : 4;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
+
+    // 5. Reliability rank
     const rankA = reliabilityRank(a);
     const rankB = reliabilityRank(b);
     if (rankA !== rankB) {
       return rankA - rankB;
     }
 
-    // 5. Compare by score descending, with custom client-side iOS adjustments
+    // 6. Compare by score descending, with custom client-side iOS adjustments
     let scoreA = a.score || 0;
     let scoreB = b.score || 0;
     
@@ -4554,26 +4561,22 @@ def main():
 
         resolved_items = filter_browser_candidates_when_primary_links_exist(resolved_items)
 
-        # Sort by reliability first: smooth segment probes and domain history feed the
-        # score, while server-only/browser candidates remain last-resort backup links.
         def get_type_priority(item):
-            if (item.get("probe") or {}).get("backup"):
-                return 5
             t = item["stream_type"]
-            if t == "iframe":
+            if t == "hls":
                 return 0
-            elif t == "dash":
+            elif t == "iframe":
                 return 1
-            elif t == "hls":
+            elif t == "dash":
                 return 2
             elif t == "native":
                 return 3
             return 4
 
         resolved_items.sort(key=lambda item: (
+            get_type_priority(item),
             stream_reliability_rank(item),
             -int(item.get("score") or 0),
-            get_type_priority(item),
         ))
         resolved_items = resolved_items[:20]
 
