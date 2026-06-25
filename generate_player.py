@@ -756,11 +756,12 @@ input[type=range].vol-slider {
   font-weight: 700;
   color: var(--red);
   min-width: 22px;
+  flex-shrink: 0;
 }
-.link-info { flex: 1; }
-.link-label { font-size: 13px; font-weight: 500; color: var(--text); display: block; }
-.link-meta  { font-size: 11px; color: #666; margin-top: 2px; display: block; }
-.link-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+.link-info { flex: 1; min-width: 0; }
+.link-label { font-size: 13px; font-weight: 500; color: var(--text); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.link-meta  { font-size: 11px; color: #666; margin-top: 2px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.link-badges { display: flex; gap: 5px; flex-wrap: wrap; flex-shrink: 0; }
 .badge {
   font-size: 10px;
   font-weight: 600;
@@ -768,6 +769,7 @@ input[type=range].vol-slider {
   border-radius: 4px;
   font-family: 'Rajdhani', sans-serif;
   letter-spacing: 0.3px;
+  white-space: nowrap;
 }
 .badge.hd    { background: rgba(46,204,113,0.15);  color: #2ecc71; border: 1px solid rgba(46,204,113,0.3); }
 .badge.sd    { background: rgba(241,196,15,0.15);   color: #f1c40f; border: 1px solid rgba(241,196,15,0.3); }
@@ -781,9 +783,7 @@ input[type=range].vol-slider {
 .badge.iframe{ background: rgba(241,196,15,0.12);   color: #f1c40f; border: 1px solid rgba(241,196,15,0.3); }
 .badge.backup{ background: rgba(255,255,255,0.08);   color: #b8bcc8; border: 1px solid rgba(255,255,255,0.18); }
 .badge.client{ background: rgba(255, 99, 132, 0.14); color: #ff6384; border: 1px solid rgba(255, 99, 132, 0.32); }
-.badge.smooth{ background: rgba(0, 209, 178, 0.16); color: #00d1b2; border: 1px solid rgba(0, 209, 178, 0.34); }
-.badge.risk  { background: rgba(255, 193, 7, 0.14); color: #ffc107; border: 1px solid rgba(255, 193, 7, 0.34); }
-.link-play-icon { color: #444; transition: color 0.15s; }
+.link-play-icon { color: #444; transition: color 0.15s; flex-shrink: 0; }
 .stream-link-item:hover .link-play-icon,
 .stream-link-item.active .link-play-icon { color: var(--red); }
 .link-play-icon svg { width: 18px; height: 18px; fill: currentColor; }
@@ -882,23 +882,26 @@ input[type=range].vol-slider {
 
 
 
-@media(max-width:600px) {
-  .site-header { padding: 10px 14px; }
-  .logo { font-size: 18px; }
-  input[type=range].vol-slider { width: 44px; }
-  .time-label { display: none; }
-  .link-label { font-size: 12px; }
-  .type-legend { display: none; }
-}
 @media (max-width: 768px) {
   .main { padding: 8px 6px; }
   .player-card { border-radius: 8px; }
   .video-wrap { aspect-ratio: 16/9; }
   .socials { gap: 8px; margin: 10px 0; }
   .soc-btn { padding: 12px 16px; font-size: 13px; border-radius: 8px; }
-  .stream-link-item { padding: 9px 12px; }
+  .stream-link-item { padding: 9px 10px; gap: 8px; flex-wrap: wrap; }
+  .link-info { flex-basis: calc(100% - 70px); }
   .link-label { font-size: 12px; }
+  .link-badges { flex-basis: 100%; padding-left: 30px; margin-top: -2px; }
   .badge { font-size: 9px; padding: 1px 5px; }
+  .link-play-icon { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); }
+  .stream-link-item { position: relative; padding-right: 32px; }
+}
+@media(max-width:600px) {
+  .site-header { padding: 10px 14px; }
+  .logo { font-size: 18px; }
+  input[type=range].vol-slider { width: 44px; }
+  .time-label { display: none; }
+  .type-legend { display: none; }
 }
 </style>
 </head>
@@ -1385,11 +1388,6 @@ const priorityOf = (lnk) => PLAYBACK_TYPE_PRIORITY[lnk.type] ?? 4;
 function reliabilityRank(lnk) {
   if (!lnk) return 9;
   if (lnk.browserCandidate || (lnk.badges || []).includes('backup')) return 8;
-  const label = String(lnk.smoothnessLabel || 'unknown').toLowerCase();
-  if (label === 'smooth') return 0;
-  if (label === 'stable') return 1;
-  if (label === 'ok') return 2;
-  if (label === 'buffer-risk') return 7;
   if (lnk.type === 'iframe') return 3;
   if (lnk.type === 'native') return 4;
   if (lnk.type === 'dash') return 5;
@@ -2203,9 +2201,10 @@ retryBtn.addEventListener('click', () => {
 ═══════════════════════════════════════════════════════════════ */
 const BADGE_LABELS = {
 		  hd:'HD', sd:'SD', eng:'ENG', ara:'ARA', ios:'🍎 iPhone',
-		  backup:'BACKUP', client:'CLIENT', smooth:'SMOOTH', risk:'BUFFER RISK',
+		  backup:'BACKUP', client:'CLIENT',
 		  auto:'AUTO', dash:'DASH', hls:'HLS', mp4:'MP4', iframe:'EMBED'
 		};
+const HIDDEN_BADGES = new Set(['smooth', 'risk']);
 
 function buildLinks() {
   linksList.innerHTML = '';
@@ -2219,7 +2218,7 @@ function buildLinks() {
     row.className = 'stream-link-item' + (!lnk.url ? ' disabled' : '');
     row.dataset.index = i;
 
-    const displayBadges = [...lnk.badges];
+    const displayBadges = lnk.badges.filter(b => !HIDDEN_BADGES.has(b));
     const detectedType = lnk.type !== 'auto' ? lnk.type : detectType(lnk.url, null);
     if (detectedType && !displayBadges.includes(detectedType) && detectedType !== 'unknown' && detectedType !== null) {
       displayBadges.unshift(detectedType);
@@ -3288,15 +3287,6 @@ def stream_reliability_rank(item):
     probe = (item or {}).get("probe") or {}
     if probe.get("backup") or probe.get("browser_candidate"):
         return 8
-    label = str(probe.get("smoothness_label") or "unknown").lower()
-    if label == "smooth":
-        return 0
-    if label == "stable":
-        return 1
-    if label == "ok":
-        return 2
-    if label == "buffer-risk":
-        return 7
     stream_type = (item or {}).get("stream_type")
     if stream_type == "iframe":
         return 3
@@ -4513,10 +4503,6 @@ def main():
                     badges.append("backup")
                 if probe.get("browser_candidate"):
                     badges.append("client")
-                if probe.get("smoothness_label") in ("smooth", "stable"):
-                    badges.append("smooth")
-                elif probe.get("smoothness_label") == "buffer-risk":
-                    badges.append("risk")
                     
                 badges = list(dict.fromkeys(badges))
                 
@@ -4541,10 +4527,6 @@ def main():
                     meta_parts.append("Backup")
                 if probe.get("browser_candidate"):
                     meta_parts.append("Client Browser Candidate")
-                if probe.get("smoothness_label") in ("smooth", "stable"):
-                    meta_parts.append("Smooth")
-                elif probe.get("smoothness_label") == "buffer-risk":
-                    meta_parts.append("Buffer Risk")
                 if probe.get("buffer_headroom"):
                     meta_parts.append(f"{probe['buffer_headroom']}x Headroom")
                 
@@ -4632,8 +4614,6 @@ def main():
                 "height": (item.get("probe") or {}).get("height"),
                 "validationStatus": (item.get("probe") or {}).get("validation_status"),
                 "validationReason": (item.get("probe") or {}).get("validation_reason"),
-                "smoothnessScore": (item.get("probe") or {}).get("smoothness_score"),
-                "smoothnessLabel": (item.get("probe") or {}).get("smoothness_label"),
                 "bufferHeadroom": (item.get("probe") or {}).get("buffer_headroom"),
             }
             if (item.get("probe") or {}).get("browser_candidate"):
