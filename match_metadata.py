@@ -456,6 +456,19 @@ def extract_result_from_html(html, match, source_url="", checked_at=None):
         return None
     if "wikipedia.org" in source_domain(source_url) and status != "final":
         return None
+
+    try:
+        match_time = parse_time(match.get("match_time"))
+        now_utc = datetime.now(timezone.utc)
+        if status == "final" and now_utc < match_time:
+            print(f"[!] Rejecting bogus final score for future match {match.get('match_name')}: {score1}-{score2}")
+            return None
+        if status == "live" and now_utc < match_time - timedelta(minutes=15):
+            print(f"[!] Rejecting bogus live score for future match {match.get('match_name')}: {score1}-{score2}")
+            return None
+    except Exception:
+        pass
+
     return result_from_scores(match, score1, score2, status, source_url, checked_at)
 
 

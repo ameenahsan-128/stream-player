@@ -90,6 +90,25 @@ def slugify(name):
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
 
+def token_fuzzy_subset(subset, superset):
+    """Checks if subset is a fuzzy subset of superset using exact match + consonant skeleton match."""
+    for mt in subset:
+        matched = False
+        for ct in superset:
+            if mt == ct:
+                matched = True
+                break
+            mt_consonants = re.sub(r'[aeiou]', '', mt)
+            ct_consonants = re.sub(r'[aeiou]', '', ct)
+            if len(mt_consonants) >= 3 and len(ct_consonants) >= 3:
+                if mt_consonants == ct_consonants or mt_consonants in ct_consonants or ct_consonants in mt_consonants:
+                    matched = True
+                    break
+        if not matched:
+            return False
+    return True
+
+
 def match_name_matches(schedule_name, query):
     """Fuzzy match: check if query tokens are in the schedule name."""
     query_tokens = set(re.findall(r"[a-z]+", query.lower()))
@@ -100,7 +119,7 @@ def match_name_matches(schedule_name, query):
     name_tokens -= noise
     if not query_tokens:
         return False
-    return query_tokens.issubset(name_tokens)
+    return token_fuzzy_subset(query_tokens, name_tokens)
 
 
 def find_match(schedule, identifier):

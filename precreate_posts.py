@@ -424,19 +424,60 @@ MATCH_ALIASES = {
     "am": "australia",
     "qat": "qatar",
     "qater": "qatar",
-    "cura": "curacao",
-    "curacao": "curacao",
     "switz": "switzerland",
+    "switzrlnd": "switzerland",
     "swi": "switzerland",
+    "sui": "switzerland",
     "scot": "scotland",
+    "scotlnd": "scotland",
     "sco": "scotland",
+    "tur": "turkiye",
     "turk": "turkiye",
     "turkey": "turkiye",
+    "turkye": "turkiye",
     "aus": "australia",
+    "austrliaturky": "australia turkiye",
     "bra": "brazil",
     "mor": "morocco",
+    "moroco": "morocco",
+    "moro": "morocco",
     "para": "paraguay",
-    "par": "paraguay"
+    "par": "paraguay",
+    "canad": "canada",
+    "bosniahrg": "bosnia",
+    "safrica": "south africa",
+    "korea": "korea",
+    "czech": "czechia",
+    "czechia": "czechia",
+    # Epicsports portal abbreviations
+    "irn": "iran",
+    "nzlnd": "zealand",
+    "nwzlnd": "zealand",
+    "ksa": "saudi",
+    "urugy": "uruguay",
+    "uru": "uruguay",
+    "germny": "germany",
+    "curcao": "curacao",
+    "nthlnds": "netherlands",
+    "jpan": "japan",
+    "swden": "sweden",
+    "tnsia": "tunisia",
+    "ivorycst": "ivory",
+    "ecdor": "ecuador",
+    "sene": "senegal",
+    "sengal": "senegal",
+    "bel": "belgium",
+    "egyp": "egypt",
+    "hai": "haiti",
+    "esp": "spain",
+    "cabo": "verde",
+    "cape": "verde",
+    "fra": "france",
+    "arg": "argentina",
+    "alg": "algeria",
+    "nor": "norway",
+    "irq": "iraq",
+    "jor": "jordan",
 }
 
 MATCH_STOP_WORDS = {
@@ -455,6 +496,25 @@ def match_words(text):
     return set(words)
 
 
+def token_fuzzy_subset(subset, superset):
+    """Checks if subset is a fuzzy subset of superset using exact match + consonant skeleton match."""
+    for mt in subset:
+        matched = False
+        for ct in superset:
+            if mt == ct:
+                matched = True
+                break
+            mt_consonants = re.sub(r'[aeiou]', '', mt)
+            ct_consonants = re.sub(r'[aeiou]', '', ct)
+            if len(mt_consonants) >= 3 and len(ct_consonants) >= 3:
+                if mt_consonants == ct_consonants or mt_consonants in ct_consonants or ct_consonants in mt_consonants:
+                    matched = True
+                    break
+        if not matched:
+            return False
+    return True
+
+
 def item_matches_title_or_match(item, title, match_name=None, allow_title_only=False):
     item_title = item.get("title", "")
     expected = match_words(match_name or "")
@@ -462,10 +522,10 @@ def item_matches_title_or_match(item, title, match_name=None, allow_title_only=F
     if normalize_title(item_title) == normalize_title(title):
         if allow_title_only or not expected:
             return True
-        return expected.issubset(combined)
+        return token_fuzzy_subset(expected, combined)
     if not match_name:
         return False
-    return len(expected) >= 2 and expected.issubset(combined)
+    return len(expected) >= 2 and token_fuzzy_subset(expected, combined)
 
 
 def item_matches_team_page(item, team, config=None):
@@ -477,7 +537,7 @@ def item_matches_team_page(item, team, config=None):
     url = item.get("url", "")
     text_tokens = set(re.findall(r"[a-z0-9]+", f"{title} {url}".lower()))
     team_words = match_words(team)
-    if team_words and team_words.issubset(match_words(f"{title} {url}")):
+    if team_words and token_fuzzy_subset(team_words, match_words(f"{title} {url}")):
         return True
 
     team_code = get_team_title_code(config or {}, team)

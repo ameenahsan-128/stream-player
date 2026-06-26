@@ -2603,9 +2603,77 @@ def get_clean_match_title(label, url):
     # 3. Fall back
     return None
 
+TARGET_MATCH_TITLE = None
+
+def is_different_match_link(text, url, target_title):
+    if not target_title:
+        return False
+    
+    # Extract target teams
+    target_title_lower = target_title.lower()
+    target_teams = [t.strip() for t in target_title_lower.split(" vs ") if t.strip()]
+    if not target_teams:
+        target_teams = [t.strip() for t in target_title_lower.split(" v ") if t.strip()]
+        
+    if not target_teams:
+        return False
+
+    # Get consonant skeletons for target teams
+    def get_consonants(s):
+        return re.sub(r'[^a-z]', '', re.sub(r'[aeiou]', '', s.lower()))
+
+    target_skeletons = [get_consonants(t) for t in target_teams if len(get_consonants(t)) >= 3]
+
+    # Check if this URL or text represents a match preview page/link
+    url_lower = url.lower()
+    text_lower = text.lower()
+    
+    # Indicators that a URL/text is a match preview/page
+    is_preview = False
+    if "/2026/06/" in url_lower or "vs" in url_lower or "-v-" in url_lower:
+        is_preview = True
+    if "vs" in text_lower or " v " in text_lower:
+        is_preview = True
+
+    if not is_preview:
+        return False
+
+    # If it is a match link, check if it matches our target teams
+    # It must contain at least one of our target team names/skeletons
+    matched = False
+    for skeleton in target_skeletons:
+        # Check URL or text for this skeleton
+        url_cons = get_consonants(url_lower)
+        text_cons = get_consonants(text_lower)
+        if skeleton in url_cons or skeleton in text_cons:
+            matched = True
+            break
+            
+    # Also check if any target team name is in the text/URL
+    for team in target_teams:
+        # Get individual words of the team
+        for word in team.split():
+            if len(word) >= 3 and (word in url_lower or word in text_lower):
+                matched = True
+                break
+        if matched:
+            break
+
+    # If it represents a match but did NOT match our target teams, it is a different match!
+    if not matched:
+        return True
+
+    return False
+
 def is_likely_stream_button(text, url, parent_url):
     u = url.lower()
     t = text.lower()
+    
+    global TARGET_MATCH_TITLE
+    if TARGET_MATCH_TITLE:
+        if is_different_match_link(text, url, TARGET_MATCH_TITLE):
+            return False
+
     
     # Exclude image, style, script, document, font extensions
     ignored_extensions = {
@@ -3884,7 +3952,7 @@ def probe_stream_url(url, stream_type, clear_keys=None, domain_health=None, refe
 
     # Blocklist check for known non-match/local stream patterns
     url_lower = url.lower()
-    blocked_patterns = ["puertorico", "nbculocallive.akamaized.net"]
+    blocked_patterns = ["puertorico", "nbculocallive.akamaized.net", "caze_tv.m3u8"]
     for pattern in blocked_patterns:
         if pattern in url_lower:
             result["error"] = "blocked-stream-pattern"
@@ -4167,6 +4235,9 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    global TARGET_MATCH_TITLE
+    TARGET_MATCH_TITLE = args.title
     
     # Collect root URLs
     root_urls = []

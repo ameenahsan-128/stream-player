@@ -934,6 +934,7 @@ MATCH_ALIASES = {
     "ivorycst": "ivory",
     "ecdor": "ecuador",
     "sene": "senegal",
+    "sengal": "senegal",
     "bel": "belgium",
     "egyp": "egypt",
     "hai": "haiti",
@@ -1073,6 +1074,25 @@ def _source_url_path_matches_match(url, match_name):
     return slug1 in path and slug2 in path
 
 
+def token_fuzzy_subset(subset, superset):
+    """Checks if subset is a fuzzy subset of superset using exact match + consonant skeleton match."""
+    for mt in subset:
+        matched = False
+        for ct in superset:
+            if mt == ct:
+                matched = True
+                break
+            mt_consonants = re.sub(r'[aeiou]', '', mt)
+            ct_consonants = re.sub(r'[aeiou]', '', ct)
+            if len(mt_consonants) >= 3 and len(ct_consonants) >= 3:
+                if mt_consonants == ct_consonants or mt_consonants in ct_consonants or ct_consonants in mt_consonants:
+                    matched = True
+                    break
+        if not matched:
+            return False
+    return True
+
+
 def source_matches_schedule_item(match, candidate):
     """Return True if a discovered source candidate belongs to this match.
 
@@ -1094,7 +1114,7 @@ def source_matches_schedule_item(match, candidate):
     candidate_tokens = normalize_match_tokens(candidate_text)
     if not match_tokens:
         return False
-    return match_tokens.issubset(candidate_tokens)
+    return token_fuzzy_subset(match_tokens, candidate_tokens)
 
 
 def source_urls_for_match(match):
