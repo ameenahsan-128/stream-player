@@ -63,6 +63,7 @@ from match_metadata import (
     result_is_final,
 )
 from pipeline_storage import (
+    _match_is_completed,
     archive_completed_matches,
     ensure_runtime_dirs,
     load_schedule,
@@ -652,6 +653,61 @@ def update_portal_match_page(automation_config, new_config, new_token, match, st
     match["new_blogger_page_url"] = page_url
     record_content_hash(match, "stream_page", page_html)
     return page_url
+
+
+def cleanup_completed_portal_pages(schedule, automation_config, new_config, now):
+    """
+    Ensure all completed matches in the active schedule have their portal pages
+    correctly transitioned to the 'ended' state and their preview posts put down
+    before they are archived.
+    """
+    scheduler_config = get_scheduler_config(automation_config)
+    completed = [m for m in schedule if _match_is_completed(m, now, scheduler_config)]
+    if not completed:
+        return
+
+    portal_updates_enabled = has_oauth(new_config)
+    if not portal_updates_enabled:
+        return
+
+    try:
+        print(f"[*] Found {len(completed)} completed match(es) to clean up on Blogger portal...")
+        token = get_access_token(new_config)
+        for match in completed:
+            # 1. Update portal page to ended state
+            if not match.get("new_blog_ended_set"):
+                print(f"  [*] Transitioning portal page to ended state for: {match.get('match_name')}")
+                try:
+                    update_portal_match_page(automation_config, new_config, token, match, "ended", schedule=schedule)
+                    match["new_blog_ended_set"] = True
+                    match["new_blog_iframe_set"] = False
+                    match["new_blog_prepare_set"] = False
+                except Exception as e:
+                    print(f"  [-] Portal ended-state update failed for {match.get('match_name')}: {e}")
+
+            # 2. Put down preview post
+            post_id = str(match.get("new_blogger_post_id") or "").strip()
+            if post_id and not match.get("new_blog_post_put_down"):
+                print(f"  [*] Putting down preview post {post_id} for: {match.get('match_name')}")
+                try:
+                    render_match = with_thumbnail_src(automation_config, new_config, match)
+                    post_html = render_preview_post(new_config, render_match)
+                    post_url = update_blogger_post(
+                        new_config,
+                        token,
+                        post_id,
+                        preview_post_title(render_match, new_config),
+                        post_html,
+                        published="2000-01-01T00:00:00Z",
+                        preserve_existing_thumbnail=True,
+                    )
+                    match["new_blogger_post_url"] = post_url
+                    match["new_blog_post_put_down"] = True
+                except Exception as e:
+                    print(f"  [-] Preview post put-down failed for {match.get('match_name')}: {e}")
+    except Exception as e:
+        print(f"[-] Failed to cleanup completed portal pages: {e}")
+
 
 
 def clean_generated_files(schedule, paths):
@@ -1773,6 +1829,7 @@ def check_and_run():
 
     changed = False
     now = datetime.now(timezone.utc)
+    cleanup_completed_portal_pages(schedule, automation_config, new_config, now)
     schedule, archived = archive_completed_matches(schedule, automation_config, scheduler_config, now)
     if archived:
         print(f"[*] Archived {len(archived)} completed match(es) before scheduler run.")
@@ -2437,6 +2494,7 @@ def check_and_run():
         save_scheduler_state(state, automation_config)
 
     if changed:
+        cleanup_completed_portal_pages(schedule, automation_config, new_config, now)
         schedule, archived_after = archive_completed_matches(schedule, automation_config, scheduler_config, now)
         if archived_after:
             print(f"[*] Archived {len(archived_after)} completed match(es) after scheduler run.")

@@ -152,25 +152,28 @@ def archive_entries(entries, config=None, now=None, reason="completed"):
     return written
 
 
-def _match_is_completed(match, now=None):
+def _match_is_completed(match, now=None, scheduler_config=None):
     """Return True if the match should be considered completed for archival."""
     if match.get("status") == "completed":
         return True
 
-    # A final result for a future match is almost certainly bogus metadata
-    # (e.g. a Wikipedia group table read as a score). Only trust it when the
-    # match time has already passed.
     now = now or datetime.now(timezone.utc)
     try:
         match_time = parse_time(match.get("match_time"))
-        result_in_past = match_time <= now
+        # Do not archive matches whose active window has not ended yet.
+        # A football match + post-match coverage lasts at least 3 hours.
+        scheduler_config = scheduler_config or {}
+        end_hours = float(scheduler_config.get("active_window_end_hours", 3))
+        active_window_end = match_time + timedelta(hours=end_hours)
+        if now < active_window_end:
+            return False
     except Exception:
-        result_in_past = True
+        pass
 
     result = match.get("result") if isinstance(match.get("result"), dict) else {}
-    if result.get("status") == "final" and result_in_past:
+    if result.get("status") == "final":
         return True
-    if match.get("match_status") == "completed" and result_in_past:
+    if match.get("match_status") == "completed":
         return True
     return False
 
@@ -183,7 +186,7 @@ def archive_completed_matches(schedule, config=None, scheduler_config=None, now=
     archived = []
 
     for match in schedule:
-        should_archive = _match_is_completed(match, now=now)
+        should_archive = _match_is_completed(match, now=now, scheduler_config=scheduler_config)
         if should_archive:
             # Normalize status so downstream logic does not re-process it
             if match.get("status") != "completed":

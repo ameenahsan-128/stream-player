@@ -3952,7 +3952,7 @@ def probe_stream_url(url, stream_type, clear_keys=None, domain_health=None, refe
 
     # Blocklist check for known non-match/local stream patterns
     url_lower = url.lower()
-    blocked_patterns = ["puertorico", "nbculocallive.akamaized.net", "caze_tv.m3u8"]
+    blocked_patterns = ["puertorico", "nbculocallive.akamaized.net", "caze_tv.m3u8", "87547578.m3u8"]
     for pattern in blocked_patterns:
         if pattern in url_lower:
             result["error"] = "blocked-stream-pattern"
