@@ -108,11 +108,11 @@ class TestSchedulerSafety(unittest.TestCase):
         mock_archive.side_effect = lambda s, *args: (s, [])
         
         # Run check_and_run
-        with patch("match_scheduler.active_window") as mock_active_window:
-            check_and_run()
-            # If the review match is skipped at the start of the loop,
-            # active_window should not be called for it.
-            mock_active_window.assert_not_called()
+        check_and_run()
+        
+        # Since the review match is active (now <= run_end), it is skipped.
+        # Verify save_schedule was not called since it was skipped.
+        mock_save_schedule.assert_not_called()
 
     @patch("match_scheduler.is_internet_available")
     @patch("match_scheduler.load_automation_config")
@@ -215,6 +215,33 @@ class TestSchedulerSafety(unittest.TestCase):
 
         self.assertTrue(schedule[0]["_shortcuts_resolved"])
         mock_save_schedule.assert_called_once_with(schedule, {})
+
+    @patch("match_scheduler.clean_generated_files")
+    @patch("match_scheduler.load_automation_config")
+    @patch("match_scheduler.load_schedule")
+    @patch("match_scheduler.save_schedule")
+    @patch("match_scheduler.get_player_slots")
+    @patch("match_scheduler.has_oauth")
+    @patch("match_scheduler.archive_completed_matches")
+    @patch("match_scheduler.ensure_runtime_dirs")
+    def test_clean_generated_files_called(
+        self,
+        mock_ensure_dirs,
+        mock_archive,
+        mock_has_oauth,
+        mock_get_slots,
+        mock_save_schedule,
+        mock_load_schedule,
+        mock_load_config,
+        mock_clean_files
+    ):
+        mock_load_config.return_value = {}
+        mock_load_schedule.return_value = [{"match_name": "Test", "match_time": "2026-06-26T04:49:33.855562Z", "status": "completed"}]
+        mock_archive.return_value = ([], [])
+        mock_ensure_dirs.return_value = {}
+        
+        check_and_run()
+        mock_clean_files.assert_called_once()
 
 
 if __name__ == "__main__":

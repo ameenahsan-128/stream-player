@@ -3101,17 +3101,22 @@ def _unwrap_iframe_relay_pages(iframe_urls):
 
 
 def parse_manifest_quality(text, stream_type):
-    quality = {"height": None, "bandwidth": None}
+    quality = {"height": None, "bandwidth": None, "audio_only": False}
     if not text:
         return quality
 
     if stream_type == "hls":
         heights = [int(v) for v in re.findall(r"RESOLUTION=\d+x(\d+)", text, re.IGNORECASE)]
         bandwidths = [int(v) for v in re.findall(r"BANDWIDTH=(\d+)", text, re.IGNORECASE)]
+        codecs_list = re.findall(r'CODECS="([^"]+)"', text, re.IGNORECASE)
         if heights:
             quality["height"] = max(heights)
         if bandwidths:
             quality["bandwidth"] = max(bandwidths)
+        # Detect audio-only: has CODECS but no RESOLUTION anywhere in the manifest
+        if codecs_list and not heights and "#EXT-X-STREAM-INF" in text:
+            if all(_is_audio_only_codecs(c) for c in codecs_list):
+                quality["audio_only"] = True
     elif stream_type == "dash":
         heights = [int(v) for v in re.findall(r"\bheight=[\"'](\d+)[\"']", text, re.IGNORECASE)]
         bandwidths = [int(v) for v in re.findall(r"\bbandwidth=[\"'](\d+)[\"']", text, re.IGNORECASE)]
@@ -3561,7 +3566,26 @@ HLS_SMOOTH_SEGMENT_SAMPLE_COUNT = 2
 HLS_SMOOTH_SEGMENT_MAX_BYTES = 256 * 1024
 
 
+def _is_audio_only_codecs(codecs_str):
+    """Return True if the CODECS string contains ONLY audio codecs (no video)."""
+    if not codecs_str:
+        return False
+    codecs = [c.strip().lower() for c in codecs_str.split(",")]
+    # Known audio-only codec prefixes (AAC, Opus, MP3, AC-3, etc.)
+    audio_prefixes = ("mp4a.", "opus", "mp3", "ac-3", "ec-3", "flac", "vorbis")
+    # Known video codec prefixes (H.264, H.265, VP9, AV1, etc.)
+    video_prefixes = ("avc1.", "avc3.", "hev1.", "hvc1.", "vp09.", "vp9", "av01.", "av1")
+    has_video = any(c.startswith(video_prefixes) for c in codecs)
+    all_audio = all(c.startswith(audio_prefixes) for c in codecs)
+    return all_audio and not has_video
+
+
 def hls_variant_entries(manifest_text):
+    """Parse #EXT-X-STREAM-INF entries from an HLS master manifest.
+    
+    Filters out audio-only variants (no RESOLUTION and audio-only CODECS)
+    to prevent selecting streams that produce audio with no video.
+    """
     entries = []
     pending = None
     for line in (manifest_text or "").splitlines():
@@ -3569,19 +3593,28 @@ def hls_variant_entries(manifest_text):
         if not line:
             continue
         if line.startswith("#EXT-X-STREAM-INF"):
-            pending = {}
+            pending = {"_raw_line": line}
             bandwidth_match = re.search(r"BANDWIDTH=(\d+)", line, re.IGNORECASE)
             height_match = re.search(r"RESOLUTION=\d+x(\d+)", line, re.IGNORECASE)
+            codecs_match = re.search(r'CODECS="([^"]+)"', line, re.IGNORECASE)
             if bandwidth_match:
                 pending["bandwidth"] = int(bandwidth_match.group(1))
             if height_match:
                 pending["height"] = int(height_match.group(1))
+            if codecs_match:
+                pending["codecs"] = codecs_match.group(1)
             continue
         if line.startswith("#"):
             continue
         if pending is not None:
             entry = dict(pending)
             entry["uri"] = line
+            entry.pop("_raw_line", None)
+            # Skip audio-only renditions: no RESOLUTION and codecs are all audio
+            if not entry.get("height") and _is_audio_only_codecs(entry.get("codecs")):
+                print(f"[*] Skipping audio-only HLS variant: {line} (codecs={entry.get('codecs')})")
+                pending = None
+                continue
             entries.append(entry)
             pending = None
     return entries
@@ -3965,6 +3998,13 @@ def probe_stream_url(url, stream_type, clear_keys=None, domain_health=None, refe
 
         quality = parse_manifest_quality(manifest_text, stream_type)
         result.update(quality)
+
+        # Reject audio-only streams (no video track)
+        if quality.get("audio_only"):
+            result["error"] = "audio-only-stream"
+            result["validation_reason"] = "audio-only-stream-no-video-track"
+            print(f"[-] Rejecting audio-only stream (no video track): {url}")
+            return result
 
         if stream_type == "hls":
             if not manifest_text.lstrip().startswith("#EXTM3U"):

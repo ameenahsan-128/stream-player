@@ -429,7 +429,8 @@ def team_page_reuse_score(item, team, config=None):
     return score
 
 
-def find_existing_blogger_post(config, access_token, title, match_name=None):
+def find_existing_blogger_post(config, access_token, title, match_name=None, exclude_ids=None):
+    exclude_ids = set(exclude_ids or [])
     blog_id = config.get("blog_id")
     headers = {"Authorization": f"Bearer {access_token}"}
 
@@ -443,6 +444,9 @@ def find_existing_blogger_post(config, access_token, title, match_name=None):
         )
         response.raise_for_status()
         for item in response.json().get("items", []):
+            item_id = item.get("id")
+            if item_id in exclude_ids:
+                continue
             if item_matches_title_or_match(item, title, match_name):
                 return item.get("id"), item.get("url")
     except Exception as e:
@@ -458,6 +462,9 @@ def find_existing_blogger_post(config, access_token, title, match_name=None):
         response.raise_for_status()
         data = response.json()
         for item in data.get("items", []):
+            item_id = item.get("id")
+            if item_id in exclude_ids:
+                continue
             if item_matches_title_or_match(item, title, match_name, allow_title_only=True):
                 return item.get("id"), item.get("url")
         page_token = data.get("nextPageToken")
@@ -466,7 +473,8 @@ def find_existing_blogger_post(config, access_token, title, match_name=None):
     return None, None
 
 
-def find_existing_blogger_page(config, access_token, title, match_name=None):
+def find_existing_blogger_page(config, access_token, title, match_name=None, exclude_ids=None):
+    exclude_ids = set(exclude_ids or [])
     blog_id = config.get("blog_id")
     headers = {"Authorization": f"Bearer {access_token}"}
     url = f"https://www.googleapis.com/blogger/v3/blogs/{blog_id}/pages"
@@ -498,6 +506,9 @@ def find_existing_blogger_page(config, access_token, title, match_name=None):
         response.raise_for_status()
         data = response.json()
         for item in data.get("items", []):
+            item_id = item.get("id")
+            if item_id in exclude_ids:
+                continue
             if item_matches_title_or_match(item, title, match_name, allow_title_only=True):
                 matches.append(item)
             elif match_name:
@@ -1296,12 +1307,24 @@ def main():
                 changed = True
                 render_match = with_thumbnail_src(automation_config, config, match)
             
+            # Calculate page and post IDs already assigned to other matches to avoid conflicts
+            exclude_page_ids = {
+                other.get("new_blogger_page_id")
+                for other in schedule
+                if other.get("fixture_id") != match.get("fixture_id") and other.get("new_blogger_page_id")
+            }
+            exclude_post_ids = {
+                other.get("new_blogger_post_id")
+                for other in schedule
+                if other.get("fixture_id") != match.get("fixture_id") and other.get("new_blogger_post_id")
+            }
+
             # Step 2: Create or Refresh Blogger PAGE (Stream Player Page)
             page_title = streaming_page_title(render_match, config)
             page_id = match.get("new_blogger_page_id")
             if config.get("prefer_existing_pages_on_refresh", True):
                 try:
-                    existing_page_id, existing_page_url = find_existing_blogger_page(config, access_token, page_title, match["match_name"])
+                    existing_page_id, existing_page_url = find_existing_blogger_page(config, access_token, page_title, match["match_name"], exclude_ids=exclude_page_ids)
                 except Exception as e:
                     existing_page_id, existing_page_url = None, None
                     print(f"[!] Existing Page lookup failed for {match['match_name']}: {e}")
@@ -1322,7 +1345,7 @@ def main():
                 print(f"\n[*] Checking stream Page for: {match['match_name']}...")
                 try:
                     page_written = False
-                    existing_page_id, existing_page_url = find_existing_blogger_page(config, access_token, page_title, match["match_name"])
+                    existing_page_id, existing_page_url = find_existing_blogger_page(config, access_token, page_title, match["match_name"], exclude_ids=exclude_page_ids)
                     if existing_page_id:
                         print(f"[*] Found existing stream Page. ID: {existing_page_id}")
                         page_id = existing_page_id
@@ -1401,7 +1424,7 @@ def main():
                 print(f"[*] Checking preview Post for: {match['match_name']}...")
                 try:
                     post_written = False
-                    existing_post_id, existing_post_url = find_existing_blogger_post(config, access_token, post_title, match["match_name"])
+                    existing_post_id, existing_post_url = find_existing_blogger_post(config, access_token, post_title, match["match_name"], exclude_ids=exclude_post_ids)
                     if existing_post_id:
                         print(f"[*] Found existing preview Post. ID: {existing_post_id}")
                         post_id = existing_post_id

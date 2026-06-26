@@ -602,7 +602,7 @@ def record_content_hash(match, key, html):
     match["content_hashes"] = hashes
 
 
-def update_portal_match_page(automation_config, new_config, new_token, match, state, links_html=""):
+def update_portal_match_page(automation_config, new_config, new_token, match, state, links_html="", schedule=None):
     if is_manual_portal_match(match):
         print(f"[*] Skipping manual portal update for {match['match_name']} as state={state}.")
         return match.get("new_blogger_page_url") or match.get("new_blogger_post_url")
@@ -616,7 +616,14 @@ def update_portal_match_page(automation_config, new_config, new_token, match, st
         page_url = update_blogger_page(new_config, new_token, page_id, title, page_html)
     else:
         print("[*] Portal Page ID missing; searching or creating the canonical streaming Page...")
-        found_id, found_url = find_existing_blogger_page(new_config, new_token, title, match["match_name"])
+        exclude_page_ids = []
+        if schedule:
+            exclude_page_ids = [
+                other.get("new_blogger_page_id")
+                for other in schedule
+                if other.get("fixture_id") != match.get("fixture_id") and other.get("new_blogger_page_id")
+            ]
+        found_id, found_url = find_existing_blogger_page(new_config, new_token, title, match["match_name"], exclude_ids=exclude_page_ids)
         if found_id:
             page_id = found_id
             if found_url:
@@ -632,6 +639,97 @@ def update_portal_match_page(automation_config, new_config, new_token, match, st
     match["new_blogger_page_url"] = page_url
     record_content_hash(match, "stream_page", page_html)
     return page_url
+
+
+def clean_generated_files(schedule, paths):
+    """
+    Purge generated files (players, links, thumbnails, scraped details)
+    and daily blog html/images that do not belong to matches currently
+    in the active schedule.
+    """
+    try:
+        import os
+        import re
+        import glob
+        from datetime import datetime, timezone
+        from portal_renderer import slugify_match_name
+        
+        # Keep set of slugs of matches in the active schedule
+        active_slugs = {slugify_match_name(m.get("match_name") or "") for m in schedule if m.get("match_name")}
+        
+        # 1. Clean player HTML files
+        players_dir = paths.get("players_dir")
+        if players_dir and os.path.isdir(players_dir):
+            for filename in os.listdir(players_dir):
+                if filename.startswith("player_") and filename.endswith(".html"):
+                    slug = filename[7:-5]
+                    if slug not in active_slugs:
+                        filepath = os.path.join(players_dir, filename)
+                        try:
+                            os.remove(filepath)
+                            print(f"[*] Comprehensive cleanup: removed stale player file: {filepath}")
+                        except Exception as e:
+                            print(f"[!] Cleanup error for {filepath}: {e}")
+                            
+        # 2. Clean links HTML files
+        links_dir = paths.get("links_dir")
+        if links_dir and os.path.isdir(links_dir):
+            for filename in os.listdir(links_dir):
+                if filename.startswith("links_") and filename.endswith(".html"):
+                    slug = filename[6:-5]
+                    if slug not in active_slugs:
+                        filepath = os.path.join(links_dir, filename)
+                        try:
+                            os.remove(filepath)
+                            print(f"[*] Comprehensive cleanup: removed stale links file: {filepath}")
+                        except Exception as e:
+                            print(f"[!] Cleanup error for {filepath}: {e}")
+                            
+        # 3. Clean thumbnail files
+        thumbnails_dir = paths.get("thumbnails_dir")
+        if thumbnails_dir and os.path.isdir(thumbnails_dir):
+            for filename in os.listdir(thumbnails_dir):
+                if filename.startswith("thumb_") and filename.endswith(".jpg"):
+                    slug = filename[6:-4]
+                    if slug not in active_slugs:
+                        filepath = os.path.join(thumbnails_dir, filename)
+                        try:
+                            os.remove(filepath)
+                            print(f"[*] Comprehensive cleanup: removed stale thumbnail: {filepath}")
+                        except Exception as e:
+                            print(f"[!] Cleanup error for {filepath}: {e}")
+                            
+        # 4. Clean diagnostics (crawl details)
+        diag_dir = paths.get("diagnostics_dir")
+        if diag_dir and os.path.isdir(diag_dir):
+            for filename in os.listdir(diag_dir):
+                # Check if any active match slug is in the filename
+                if not any(slug in filename for slug in active_slugs):
+                    filepath = os.path.join(diag_dir, filename)
+                    try:
+                        os.remove(filepath)
+                        print(f"[*] Comprehensive cleanup: removed stale diagnostic: {filepath}")
+                    except Exception as e:
+                        print(f"[!] Cleanup error for {filepath}: {e}")
+                        
+        # 5. Clean legacy daily blog files older than 2 days
+        data_dir = paths.get("data_dir")
+        if data_dir and os.path.isdir(data_dir):
+            now_dt = datetime.now(timezone.utc)
+            for pattern in ("daily_blog_preview_*.html", "daily_blog_thumb_*.jpg"):
+                for filepath in glob.glob(os.path.join(data_dir, pattern)):
+                    filename = os.path.basename(filepath)
+                    date_match = re.search(r"\d{4}-\d{2}-\d{2}", filename)
+                    if date_match:
+                        try:
+                            file_date = datetime.strptime(date_match.group(0), "%Y-%m-%d").date()
+                            if (now_dt.date() - file_date).days > 2:
+                                os.remove(filepath)
+                                print(f"[*] Comprehensive cleanup: removed stale daily blog file: {filepath}")
+                        except Exception as e:
+                            print(f"[!] Cleanup error for {filepath}: {e}")
+    except Exception as e:
+        print(f"[!] Error during comprehensive file cleanup: {e}")
 
 
 # ── URL Template Prediction Engine ──────────────────────────────────────
@@ -1596,6 +1694,9 @@ def check_and_run():
         print(f"[*] Archived {len(archived)} completed match(es) before scheduler run.")
         changed = True
 
+    # Run comprehensive file cleanup to remove unnecessary files
+    clean_generated_files(schedule, paths)
+
     # Purge junk source URLs from all pending/active matches
     for match in schedule:
         if match.get("status") in ("completed",):
@@ -1651,7 +1752,15 @@ def check_and_run():
     sorted_schedule = sorted(schedule, key=get_match_sort_key)
     for match in sorted_schedule:
         status = match.get("status", "pending")
-        if status in ("completed", "review", "failed"):
+        if status == "completed":
+            continue
+
+        try:
+            run_start, run_end, _ = active_window(match, scheduler_config)
+        except Exception:
+            run_end = datetime.max.replace(tzinfo=timezone.utc)
+
+        if status in ("review", "failed") and now <= run_end:
             continue
         # Self-heal: if a previous run crashed mid-way and left status=processing,
         # treat it as pending so the scheduler retries instead of freezing.
@@ -1675,7 +1784,7 @@ def check_and_run():
                 if portal_updates_enabled:
                     try:
                         new_token = get_access_token(new_config)
-                        update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                        update_portal_match_page(automation_config, new_config, new_token, match, "preparing", schedule=schedule)
                         match["new_blog_prepare_set"] = True
                     except Exception as e:
                         print(f"[-] Portal preparing-state update failed: {e}")
@@ -1851,7 +1960,7 @@ def check_and_run():
                                 try:
                                     links_html = write_pregenerated_links(match["match_name"], pregen_post_url, automation_config)
                                     new_token = get_access_token(new_config)
-                                    portal_url = update_portal_match_page(automation_config, new_config, new_token, match, "live", links_html=links_html)
+                                    portal_url = update_portal_match_page(automation_config, new_config, new_token, match, "live", links_html=links_html, schedule=schedule)
                                     match["new_blog_iframe_set"] = True
                                     match["new_blog_prepare_set"] = False
                                     print(f"[+] Phase 1: Portal updated with pre-generated links: {portal_url}")
@@ -1880,7 +1989,7 @@ def check_and_run():
                     if portal_updates_enabled and not match.get("new_blog_prepare_set") and not match.get("new_blog_iframe_set"):
                         try:
                             new_token = get_access_token(new_config)
-                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing", schedule=schedule)
                             match["new_blog_prepare_set"] = True
                         except Exception as e:
                             print(f"[-] Portal preparing-state update failed: {e}")
@@ -1943,7 +2052,7 @@ def check_and_run():
                     if portal_updates_enabled and not match.get("new_blog_prepare_set") and not match.get("new_blog_iframe_set"):
                         try:
                             new_token = get_access_token(new_config)
-                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing", schedule=schedule)
                             match["new_blog_prepare_set"] = True
                         except Exception as e:
                             print(f"[-] Portal preparing-state update failed: {e}")
@@ -1995,7 +2104,7 @@ def check_and_run():
                                 if portal_updates_enabled and not match.get("new_blog_iframe_set") and not match.get("new_blog_prepare_set"):
                                     try:
                                         new_token = get_access_token(new_config)
-                                        update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                                        update_portal_match_page(automation_config, new_config, new_token, match, "preparing", schedule=schedule)
                                         match["new_blog_prepare_set"] = True
                                     except Exception as e:
                                         print(f"[-] Portal preparing-state update failed: {e}")
@@ -2037,21 +2146,21 @@ def check_and_run():
                                 print("[!] Stream links were extracted but links HTML is missing; setting preparing state.")
                                 # Only set preparing if page hasn't already been set to live
                                 if not match.get("new_blog_iframe_set"):
-                                    update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                                    update_portal_match_page(automation_config, new_config, new_token, match, "preparing", schedule=schedule)
                                     match["new_blog_prepare_set"] = True
                             else:
-                                new_post_url = update_portal_match_page(automation_config, new_config, new_token, match, "live", links_html=links_html)
+                                new_post_url = update_portal_match_page(automation_config, new_config, new_token, match, "live", links_html=links_html, schedule=schedule)
                                 print(f"[+] Portal page updated with live links: {new_post_url}")
                                 match["new_blog_iframe_set"] = True
                                 match["new_blog_prepare_set"] = False
                         elif real_stream_links:
                             print("[!] Stream links were extracted but no valid portal button HTML was written; setting preparing state.")
                             if not match.get("new_blog_iframe_set"):
-                                update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                                update_portal_match_page(automation_config, new_config, new_token, match, "preparing", schedule=schedule)
                                 match["new_blog_prepare_set"] = True
                         elif not match.get("new_blog_prepare_set") and not match.get("new_blog_iframe_set"):
                             # Only set preparing if the page hasn't already gone live
-                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing")
+                            update_portal_match_page(automation_config, new_config, new_token, match, "preparing", schedule=schedule)
                             match["new_blog_prepare_set"] = True
                     except Exception as e:
                         print(f"[-] Portal blog update failed: {e}")
@@ -2094,7 +2203,7 @@ def check_and_run():
             if portal_updates_enabled and (not match.get("new_blog_ended_set") or newly_final):
                 try:
                     new_token = get_access_token(new_config)
-                    update_portal_match_page(automation_config, new_config, new_token, match, "ended")
+                    update_portal_match_page(automation_config, new_config, new_token, match, "ended", schedule=schedule)
                     match["new_blog_ended_set"] = True
                     match["new_blog_iframe_set"] = False
                     match["new_blog_prepare_set"] = False
@@ -2167,12 +2276,26 @@ def check_and_run():
                 match["status"] = "completed"
                 # Clean up stale player HTML file for this match
                 try:
-                    player_file = os.path.join(paths["players_dir"], f"player_{slugify_match_name(match['match_name'])}.html")
+                    match_slug = slugify_match_name(match['match_name'])
+                    player_file = os.path.join(paths["players_dir"], f"player_{match_slug}.html")
                     if os.path.exists(player_file):
                         os.remove(player_file)
                         print(f"[*] Cleaned up stale player file: {player_file}")
+                    # Also clean up link files
+                    links_file = os.path.join(paths.get("links_dir", os.path.join(paths["data_dir"], "links")), f"links_{match_slug}.html")
+                    if os.path.exists(links_file):
+                        os.remove(links_file)
+                        print(f"[*] Cleaned up stale links file: {links_file}")
+                    # Clean up crawl diagnostics
+                    diag_dir = paths.get("diagnostics_dir", os.path.join(paths["data_dir"], "scraped_details"))
+                    if os.path.isdir(diag_dir):
+                        for diag_name in os.listdir(diag_dir):
+                            if match_slug in diag_name:
+                                diag_path = os.path.join(diag_dir, diag_name)
+                                os.remove(diag_path)
+                                print(f"[*] Cleaned up diagnostic: {diag_path}")
                 except Exception as e:
-                    print(f"[!] Warning: could not remove player file: {e}")
+                    print(f"[!] Warning: match file cleanup error: {e}")
             else:
                 match["status"] = "ended"
                 print(f"[*] Waiting for verified final score before archiving {match['match_name']}.")
