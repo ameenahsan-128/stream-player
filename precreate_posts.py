@@ -107,6 +107,92 @@ from thumbnail_manager import refresh_thumbnail_url_from_sources, sanitize_thumb
 
 CONFIG_FILE = "new_blogger_config.json"
 
+def write_early_links_html(match_name, player_url, links_dir):
+    if not player_url:
+        return
+    
+    safe_name = slugify_match_name(match_name)
+    os.makedirs(links_dir, exist_ok=True)
+    filepath = os.path.join(links_dir, f"links_{safe_name}.html")
+    
+    # Check if the file already exists and has real stream links.
+    if os.path.exists(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+        # If it contains probe latency or real badges, it has real links, so skip overwriting
+        if "ms" in content or "HLS" in content or "DASH" in content:
+            print(f"[*] links_{safe_name}.html already has real stream links; skipping early link generation.")
+            return
+
+    html_lines = []
+    html_lines.append('<div style="font-family:\'Segoe UI\',Roboto,Helvetica,sans-serif; max-width:650px; margin: 20px auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 10px;">')
+    html_lines.append('  <style>')
+    html_lines.append('    .stream-btn {')
+    html_lines.append('      display: flex;')
+    html_lines.append('      flex-direction: column;')
+    html_lines.append('      align-items: center;')
+    html_lines.append('      justify-content: center;')
+    html_lines.append('      width: 100%;')
+    html_lines.append('      max-width: 550px;')
+    html_lines.append('      margin-bottom: 15px;')
+    html_lines.append('      padding: 16px 24px;')
+    html_lines.append('      background: linear-gradient(135deg, #e63946 0%, #b81d24 100%);')
+    html_lines.append('      color: #ffffff;')
+    html_lines.append('      text-decoration: none;')
+    html_lines.append('      border-radius: 12px;')
+    html_lines.append('      border: 1px solid #ff4d5a;')
+    html_lines.append('      box-shadow: 0 4px 15px rgba(230, 57, 70, 0.3);')
+    html_lines.append('      box-sizing: border-box;')
+    html_lines.append('      transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);')
+    html_lines.append('      cursor: pointer;')
+    html_lines.append('    }')
+    html_lines.append('    .stream-btn:hover {')
+    html_lines.append('      background: linear-gradient(135deg, #ff4d5a 0%, #e63946 100%);')
+    html_lines.append('      border-color: #ff808b;')
+    html_lines.append('      transform: translateY(-2px);')
+    html_lines.append('      box-shadow: 0 8px 25px rgba(230, 57, 70, 0.5);')
+    html_lines.append('    }')
+    html_lines.append('    .stream-btn:active {')
+    html_lines.append('      transform: translateY(1px);')
+    html_lines.append('      box-shadow: 0 2px 10px rgba(230, 57, 70, 0.3);')
+    html_lines.append('    }')
+    html_lines.append('    .stream-title {')
+    html_lines.append('      font-size: 16px;')
+    html_lines.append('      font-weight: 700;')
+    html_lines.append('      letter-spacing: 0.5px;')
+    html_lines.append('      margin-bottom: 6px;')
+    html_lines.append('      text-transform: uppercase;')
+    html_lines.append('      color: #ffffff;')
+    html_lines.append('      text-shadow: 0 1px 2px rgba(0,0,0,0.2);')
+    html_lines.append('      text-align: center;')
+    html_lines.append('    }')
+    html_lines.append('    .stream-subtitle {')
+    html_lines.append('      font-size: 13px;')
+    html_lines.append('      font-weight: 600;')
+    html_lines.append('      color: #00ff88;')
+    html_lines.append('      letter-spacing: 0.5px;')
+    html_lines.append('      text-transform: uppercase;')
+    html_lines.append('      text-align: center;')
+    html_lines.append('    }')
+    html_lines.append('  </style>')
+    
+    for idx in range(4):
+        direct_url = f"{player_url}?link={idx + 1}&cb={int(time.time())}"
+        title_text = f"{match_name} — Link {idx + 1}"
+        subtitle_text = "AUTO QUALITY · ENG · Works on Mobile & PC"
+        
+        html_lines.append(f'  <a class="stream-btn" href="{direct_url}" target="_blank">')
+        html_lines.append(f'    <span class="stream-title">{title_text}</span>')
+        html_lines.append(f'    <span class="stream-subtitle">{subtitle_text}</span>')
+        html_lines.append(f'  </a>')
+        
+    html_lines.append("</div>")
+    
+    html_content = "\n".join(html_lines)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(html_content)
+    print(f"[+] Early direct links file created: {filepath}")
+
 # Exact ad code scripts and popup wrappers matching goforsports.net
 DEFAULT_AD_TOP = """
 <div align="center" style="margin: 15px 0;">
@@ -1366,6 +1452,11 @@ def main():
                             changed = True
                         except Exception as e:
                             print(f"[-] Dedicated player post creation failed: {e}")
+
+            # Generate early links HTML file in data/links/
+            player_url = match.get("blogger_post_url") or match.get("player_slot_url")
+            if player_url:
+                write_early_links_html(match["match_name"], player_url, paths["links_dir"])
 
             # Step 2: Create or Refresh Blogger PAGE (Stream Player Page)
             page_title = streaming_page_title(render_match, config)
