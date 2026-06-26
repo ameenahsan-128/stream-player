@@ -83,7 +83,7 @@ def _handle_response(response):
     response.raise_for_status()
 
 
-from automation_config import get_fixture_api_config, get_portal_blog_config, get_scheduler_config, has_oauth, load_automation_config
+from automation_config import get_fixture_api_config, get_portal_blog_config, get_player_blog_config, get_scheduler_config, has_oauth, load_automation_config
 from fixture_manager import schedule_match_allowed
 from lineup_manager import refresh_lineups_for_match
 from match_metadata import content_hash, refresh_match_metadata
@@ -1227,6 +1227,18 @@ def main():
         sys.exit(1)
         
     print("[+] OAuth token verified.")
+    
+    # Load player blog config and fetch its access token
+    player_blog_config = get_player_blog_config(automation_config)
+    player_access_token = None
+    if has_oauth(player_blog_config):
+        try:
+            print("[*] Fetching Player Blog access token...")
+            player_access_token = get_access_token(player_blog_config)
+            print("[+] Player Blog OAuth token verified.")
+        except Exception as e:
+            print(f"[!] Player Blog access token error: {e}")
+
     changed = False
     if args.dry_run:
         archived = []
@@ -1318,6 +1330,42 @@ def main():
                 for other in schedule
                 if other.get("fixture_id") != match.get("fixture_id") and other.get("new_blogger_post_id")
             }
+
+            # Step 1.5: Pre-create Dedicated Player Post on Player Blog if enabled and missing
+            if player_access_token and player_blog_config.get("create_dedicated_player_posts", True):
+                if not match.get("blogger_post_id"):
+                    if args.dry_run:
+                        log_dry_run(f"Would create dedicated player post for {match['match_name']}.")
+                        changed = True
+                    else:
+                        print(f"[*] Checking/Creating dedicated player post for: {match['match_name']}...")
+                        try:
+                            placeholder_player_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>{match['match_name']} Live Stream</title>
+</head>
+<body style="background:#000;color:#fff;font-family:sans-serif;text-align:center;padding:50px;">
+<h1>{match['match_name']} Live Stream</h1>
+<p>The player is preparing. Coverage will start shortly before kickoff.</p>
+</body>
+</html>"""
+                            player_post_title = f"{match['match_name']} Live Stream"
+                            player_post_id, player_post_url = create_blogger_post(
+                                player_blog_config,
+                                player_access_token,
+                                player_post_title,
+                                placeholder_player_html,
+                                published=None
+                            )
+                            match["blogger_post_id"] = player_post_id
+                            match["blogger_post_url"] = player_post_url
+                            match["player_slot_url"] = player_post_url
+                            print(f"[+] Player Post ready. ID: {player_post_id} | URL: {player_post_url}")
+                            changed = True
+                        except Exception as e:
+                            print(f"[-] Dedicated player post creation failed: {e}")
 
             # Step 2: Create or Refresh Blogger PAGE (Stream Player Page)
             page_title = streaming_page_title(render_match, config)
@@ -1519,6 +1567,83 @@ def main():
         print("\n[+] Dry run complete. Schedule was not saved.")
     else:
         print("\n[+] No actions needed. All preview posts/pages are up to date.")
+
+    # Write pregenerated links report
+    try:
+        report_lines = []
+        html_lines = [
+            "<!DOCTYPE html>",
+            "<html>",
+            "<head>",
+            "<meta charset='UTF-8'>",
+            "<title>Pregenerated Match Links</title>",
+            "<style>",
+            "body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #121212; color: #e0e0e0; }",
+            "h1 { color: #ffffff; text-align: center; }",
+            "h2 { color: #ff9800; border-bottom: 1px solid #333; padding-bottom: 5px; margin-top: 30px; }",
+            "p { line-height: 1.6; }",
+            ".match-card { background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 8px; padding: 15px; margin-bottom: 15px; }",
+            ".match-title { font-size: 1.2em; font-weight: bold; color: #ffffff; margin-bottom: 10px; }",
+            ".link-item { margin: 8px 0; }",
+            ".link-label { font-weight: bold; color: #aaa; min-width: 150px; display: inline-block; }",
+            "a { color: #2196f3; text-decoration: none; }",
+            "a:hover { text-decoration: underline; }",
+            "</style>",
+            "</head>",
+            "<body>",
+            "<h1>Pregenerated Match Links</h1>"
+        ]
+        
+        txt_report = "PREGENERATED MATCH LINKS REPORT\n===============================\n\n"
+        upcoming_count = 0
+        
+        for match in schedule:
+            if match.get("status") == "completed":
+                continue
+            
+            match_name = match["match_name"]
+            match_time = match["match_time"]
+            player_url = match.get("blogger_post_url") or match.get("player_slot_url") or ""
+            portal_page_url = match.get("new_blogger_page_url") or ""
+            portal_post_url = match.get("new_blogger_post_url") or ""
+            
+            if player_url or portal_page_url or portal_post_url:
+                upcoming_count += 1
+                report_lines.append(f"Match: {match_name} ({match_time})")
+                if player_url:
+                    report_lines.append(f"  Player URL:       {player_url}")
+                if portal_page_url:
+                    report_lines.append(f"  Portal Page URL:  {portal_page_url}")
+                if portal_post_url:
+                    report_lines.append(f"  Portal Post URL:  {portal_post_url}")
+                report_lines.append("")
+                
+                # HTML card
+                html_lines.append("<div class='match-card'>")
+                html_lines.append(f"  <div class='match-title'>{match_name} ({match_time})</div>")
+                if player_url:
+                    html_lines.append(f"  <div class='link-item'><span class='link-label'>Player URL:</span> <a href='{player_url}' target='_blank'>{player_url}</a></div>")
+                if portal_page_url:
+                    html_lines.append(f"  <div class='link-item'><span class='link-label'>Portal Page URL:</span> <a href='{portal_page_url}' target='_blank'>{portal_page_url}</a></div>")
+                if portal_post_url:
+                    html_lines.append(f"  <div class='link-item'><span class='link-label'>Portal Post URL:</span> <a href='{portal_post_url}' target='_blank'>{portal_post_url}</a></div>")
+                html_lines.append("</div>")
+                
+        html_lines.append("</body>")
+        html_lines.append("</html>")
+        
+        if upcoming_count > 0:
+            txt_content = txt_report + "\n".join(report_lines)
+            html_content = "\n".join(html_lines)
+            
+            os.makedirs("data", exist_ok=True)
+            with open("data/pregenerated_links.txt", "w", encoding="utf-8") as f:
+                f.write(txt_content)
+            with open("data/pregenerated_links.html", "w", encoding="utf-8") as f:
+                f.write(html_content)
+            print(f"[+] Saved pregenerated links report to data/pregenerated_links.txt and data/pregenerated_links.html")
+    except Exception as e:
+        print(f"[!] Failed to write pregenerated links report: {e}")
 
 if __name__ == "__main__":
     main()
