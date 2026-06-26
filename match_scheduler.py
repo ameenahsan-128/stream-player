@@ -72,10 +72,12 @@ from pipeline_storage import (
 )
 from portal_renderer import (
     parse_match_time,
+    portal_page_url_matches_match,
     preview_post_title,
     render_preview_post,
     render_streaming_page,
     slugify_match_name,
+    split_teams,
     streaming_page_title,
 )
 from precreate_posts import create_stream_blogger_page, find_existing_blogger_page, is_manual_portal_match, update_blogger_page
@@ -611,6 +613,17 @@ def update_portal_match_page(automation_config, new_config, new_token, match, st
     title = streaming_page_title(render_match, new_config)
     page_html = render_streaming_page(new_config, render_match, state=state, links_html=links_html)
     page_id = str(match.get("new_blogger_page_id") or "").strip()
+
+    # If the stored page URL no longer matches this match, discard it and
+    # create a correct one. Blogger page URLs cannot be changed via API.
+    if page_id and match.get("new_blogger_page_url"):
+        if not portal_page_url_matches_match(match["new_blogger_page_url"], match["match_name"]):
+            print(f"[!] Stored portal page URL does not match {match['match_name']}: {match['new_blogger_page_url']}")
+            print(f"[*] Will search/create a new portal page with the correct URL slug.")
+            page_id = ""
+            match["new_blogger_page_id"] = ""
+            match["new_blogger_page_url"] = ""
+
     if page_id and not page_id.startswith("YOUR_"):
         print(f"[*] Updating portal Page {page_id} as state={state}...")
         page_url = update_blogger_page(new_config, new_token, page_id, title, page_html)
@@ -1044,12 +1057,44 @@ def candidate_text_for_url(url, anchor_text=""):
     return f"{anchor_text or ''} {path_text}"
 
 
-def source_matches_schedule_item(match, candidate_text):
-    score = match_source_score(match.get("match_name", ""), candidate_text)
-    match_token_count = len(normalize_match_tokens(match.get("match_name", "")))
-    if match_token_count <= 2:
-        return score >= match_token_count
-    return score >= 2
+def _source_url_path_matches_match(url, match_name):
+    """Strict check: the URL path must contain both team name slugs."""
+    if not url or not match_name:
+        return False
+    team1, team2 = split_teams(match_name)
+    if not (team1 and team2):
+        return False
+    try:
+        path = urlparse(url).path.lower().replace("_", "-")
+    except Exception:
+        return False
+    slug1 = slugify_match_name(team1).replace("_", "-")
+    slug2 = slugify_match_name(team2).replace("_", "-")
+    return slug1 in path and slug2 in path
+
+
+def source_matches_schedule_item(match, candidate):
+    """Return True if a discovered source candidate belongs to this match.
+
+    We require the URL path to contain both team slugs, OR all match tokens
+    to appear in the direct candidate text.  This prevents a partial team
+    match (e.g. "iran-vs-new-zealand.html" for "New Zealand Vs Belgium")
+    from being attached to the wrong match.
+    """
+    match_name = match.get("match_name", "")
+    candidate_text = candidate.get("text") if isinstance(candidate, dict) else str(candidate or "")
+    candidate_url = candidate.get("url") if isinstance(candidate, dict) else ""
+
+    # Fast strict path check
+    if _source_url_path_matches_match(candidate_url, match_name):
+        return True
+
+    # Token-based check: require ALL match tokens to be present
+    match_tokens = normalize_match_tokens(match_name)
+    candidate_tokens = normalize_match_tokens(candidate_text)
+    if not match_tokens:
+        return False
+    return match_tokens.issubset(candidate_tokens)
 
 
 def source_urls_for_match(match):
@@ -1281,6 +1326,45 @@ def extract_discovery_candidates(portal, html, trusted_domains):
         ".pdf", ".txt", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".7z", ".tar", ".gz",
         ".js", ".json"
     }
+
+    def _url_looks_valid(url):
+        # Defensive parsing: reject malformed URLs (e.g. IPv6 literals, brackets)
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return False
+        if not parsed.scheme.startswith("http"):
+            return False
+        if not parsed.netloc:
+            return False
+        if not parsed.path or parsed.path == "/":
+            return False
+        # Reject literal IPv6 hosts that slipped through (brackets in netloc)
+        if "[" in parsed.netloc or "]" in parsed.netloc:
+            return False
+        return True
+
+    def _is_blocked_url(resolved_url):
+        u_lower = resolved_url.lower()
+        if any(part in u_lower for part in STATIC_LINK_PARTS):
+            return True
+        if not trusted_domain(resolved_url, trusted_domains):
+            return True
+        try:
+            parsed = urlparse(resolved_url)
+        except Exception:
+            return True
+        path_lower = parsed.path.lower()
+        if any(path_lower.endswith(ext) for ext in ignored_extensions):
+            return True
+        if any(pattern in path_lower for pattern in _GENERIC_CONTENT_PATTERNS):
+            return True
+        if "[" in resolved_url or "]" in resolved_url:
+            return True
+        if "/search?" in resolved_url or "/search/" in path_lower:
+            return True
+        return False
+
     link_pattern = re.compile(r'<a\b([^>]*)>(.*?)</a>', re.IGNORECASE | re.DOTALL)
     for match in link_pattern.finditer(html or ""):
         attrs = match.group(1)
@@ -1289,81 +1373,61 @@ def extract_discovery_candidates(portal, html, trusted_domains):
         href_match = re.search(r'href=[\x27"]([^\x27"]+)[\x27"]', attrs, re.IGNORECASE)
         if not href_match:
             continue
-        resolved_url = urljoin(portal, href_match.group(1))
-        u_lower = resolved_url.lower()
-        if any(part in u_lower for part in STATIC_LINK_PARTS):
+        try:
+            resolved_url = urljoin(portal, href_match.group(1))
+        except Exception:
             continue
-        if not trusted_domain(resolved_url, trusted_domains):
+        if not _url_looks_valid(resolved_url):
             continue
-        parsed = urlparse(resolved_url)
-        if not parsed.scheme.startswith("http"):
-            continue
-        if not parsed.path or parsed.path == "/":
-            continue
-        path_lower = parsed.path.lower()
-        if any(path_lower.endswith(ext) for ext in ignored_extensions):
-            continue
-        # Block generic hub/content pages at discovery time
-        if any(pattern in path_lower for pattern in _GENERIC_CONTENT_PATTERNS):
-            continue
-        # Block malformed URLs
-        if "[" in resolved_url or "]" in resolved_url:
-            continue
-        # Block search result pages
-        if "/search?" in resolved_url or "/search/" in path_lower:
+        if _is_blocked_url(resolved_url):
             continue
         canon = canonical_url(resolved_url)
         if canon in seen:
             continue
         seen.add(canon)
-        # Capture surrounding context (500 chars before the link) for
-        # cases where the match name is in a heading/label near the link
-        # but NOT in the anchor text or URL itself.
+
+        # Build direct text from the URL path and anchor body only.
+        # Surrounding context is kept only for logging / tie-breaking because
+        # portal headings near a link can belong to a different match.
+        url_text = candidate_text_for_url(resolved_url, "")
+        anchor_text = body
+        direct_text = f"{url_text} {anchor_text}".strip()
+
         context_text = ""
         link_start = match.start()
         context_window = (html or "")[max(0, link_start - 500):link_start]
         context_text = re.sub(r"<[^>]+>", " ", context_window)
         context_text = re.sub(r"\s+", " ", context_text).strip()
-        # Only keep the last ~120 chars of context (nearest heading/label)
         context_text = context_text[-120:] if context_text else ""
-        combined_text = candidate_text_for_url(resolved_url, body)
-        if context_text:
-            combined_text = f"{combined_text} {context_text}"
+
         candidates.append({
             "url": resolved_url,
-            "text": combined_text
+            "text": direct_text,
+            "url_text": url_text,
+            "anchor_text": anchor_text,
+            "context_text": context_text,
         })
 
     for raw_url in re.findall(r'https?://[^\s\x27"<>]+', html or ""):
-        resolved_url = raw_url.rstrip("),.;")
-        u_lower = resolved_url.lower()
-        if any(part in u_lower for part in STATIC_LINK_PARTS):
+        try:
+            resolved_url = raw_url.rstrip("),.;")
+        except Exception:
             continue
-        if not trusted_domain(resolved_url, trusted_domains):
+        if not _url_looks_valid(resolved_url):
             continue
-        parsed = urlparse(resolved_url)
-        if not parsed.scheme.startswith("http"):
-            continue
-        if not parsed.path or parsed.path == "/":
-            continue
-        path_lower = parsed.path.lower()
-        if any(path_lower.endswith(ext) for ext in ignored_extensions):
-            continue
-        # Block generic hub/content pages at discovery time
-        if any(pattern in path_lower for pattern in _GENERIC_CONTENT_PATTERNS):
-            continue
-        # Block malformed URLs and search pages
-        if "[" in resolved_url or "]" in resolved_url:
-            continue
-        if "/search?" in resolved_url or "/search/" in path_lower:
+        if _is_blocked_url(resolved_url):
             continue
         canon = canonical_url(resolved_url)
         if canon in seen:
             continue
         seen.add(canon)
+        url_text = candidate_text_for_url(resolved_url, "")
         candidates.append({
             "url": resolved_url,
-            "text": candidate_text_for_url(resolved_url)
+            "text": url_text,
+            "url_text": url_text,
+            "anchor_text": "",
+            "context_text": "",
         })
     return candidates
 
@@ -1476,7 +1540,7 @@ def auto_discover_matches(force=False, skip_if_active_match=False):
                             continue
                     except Exception:
                         pass
-                    if source_matches_schedule_item(existing_match, candidate_text):
+                    if source_matches_schedule_item(existing_match, candidate):
                         score = match_source_score(existing_match.get("match_name", ""), candidate_text)
                         if score > best_score:
                             matched_existing = existing_match

@@ -96,6 +96,7 @@ from portal_renderer import (
     normalize_team_key,
     parse_match_time,
     preview_post_title,
+    portal_page_url_matches_match,
     render_preview_post,
     render_streaming_page,
     slugify_match_name,
@@ -119,8 +120,9 @@ def write_early_links_html(match_name, player_url, links_dir):
     if os.path.exists(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
-        # If it contains probe latency or real badges, it has real links, so skip overwriting
-        if "ms" in content or "HLS" in content or "DASH" in content:
+        # Real links contain quality/format badges (HLS, DASH, MP4, 1080p, latency, ...).
+        # Use a regex so CSS tokens like "align-items" do not falsely match.
+        if re.search(r"\b(HLS|DASH|MP4|M3U8|1080p|720p|480p|latency|\d+ms)\b", content, re.IGNORECASE):
             print(f"[*] links_{safe_name}.html already has real stream links; skipping early link generation.")
             return
 
@@ -601,14 +603,29 @@ def find_existing_blogger_page(config, access_token, title, match_name=None, exc
                 team1, team2 = split_teams(match_name)
                 for priority, team in enumerate((team1, team2)):
                     if item_matches_team_page(item, team, config):
-                        team_matches.append((priority, team, item))
+                        # Only reuse team-style pages whose URL actually
+                        # contains both teams of the current match.
+                        if portal_page_url_matches_match(item.get("url"), match_name):
+                            team_matches.append((priority, team, item))
                         break
         page_token = data.get("nextPageToken")
         if not page_token:
             break
     if matches:
-        best = sorted(matches, key=page_reuse_score)[0]
-        return best.get("id"), best.get("url")
+        # A page may match by title but have a URL slug from a different match
+        # (e.g. an old team page). Blogger page URLs are immutable, so only
+        # reuse a title-matched page when its URL slug also matches.
+        if match_name:
+            matches = [
+                item for item in matches
+                if portal_page_url_matches_match(item.get("url"), match_name)
+                or item.get("url", "").lower().endswith(
+                    f"/{re.sub(r'[^a-z0-9]+', '-', normalize_title(title)).strip('-')}.html"
+                )
+            ]
+        if matches:
+            best = sorted(matches, key=page_reuse_score)[0]
+            return best.get("id"), best.get("url")
     if team_matches:
         priority, team, best = sorted(
             team_matches,
@@ -1455,7 +1472,7 @@ def main():
 
             # Generate early links HTML file in data/links/
             player_url = match.get("blogger_post_url") or match.get("player_slot_url")
-            if player_url:
+            if player_url and not args.dry_run:
                 write_early_links_html(match["match_name"], player_url, paths["links_dir"])
 
             # Step 2: Create or Refresh Blogger PAGE (Stream Player Page)
@@ -1479,7 +1496,19 @@ def main():
                     changed = True
             page_html = generate_page_html(config, render_match, safe_name)
             page_changed = rendered_content_changed(match, "stream_page", page_html)
-            
+
+            # If the stored page URL no longer matches this match (e.g. an old
+            # team page was reused previously), clear the ID so a correct page
+            # is created. Blogger page URLs are immutable.
+            if page_id and match.get("new_blogger_page_url"):
+                if not portal_page_url_matches_match(match["new_blogger_page_url"], match["match_name"]):
+                    print(f"[!] Stored portal page URL does not match {match['match_name']}: {match['new_blogger_page_url']}")
+                    print(f"[*] Will create a new portal page with the correct URL slug.")
+                    match["new_blogger_page_id"] = ""
+                    match["new_blogger_page_url"] = ""
+                    page_id = ""
+                    changed = True
+
             if not page_id:
                 print(f"\n[*] Checking stream Page for: {match['match_name']}...")
                 try:
@@ -1723,7 +1752,7 @@ def main():
         html_lines.append("</body>")
         html_lines.append("</html>")
         
-        if upcoming_count > 0:
+        if upcoming_count > 0 and not args.dry_run:
             txt_content = txt_report + "\n".join(report_lines)
             html_content = "\n".join(html_lines)
             
@@ -1733,6 +1762,8 @@ def main():
             with open("data/pregenerated_links.html", "w", encoding="utf-8") as f:
                 f.write(html_content)
             print(f"[+] Saved pregenerated links report to data/pregenerated_links.txt and data/pregenerated_links.html")
+        elif upcoming_count > 0 and args.dry_run:
+            print(f"[*] Dry run: would save pregenerated links report for {upcoming_count} match(es).")
     except Exception as e:
         print(f"[!] Failed to write pregenerated links report: {e}")
 

@@ -152,6 +152,29 @@ def archive_entries(entries, config=None, now=None, reason="completed"):
     return written
 
 
+def _match_is_completed(match, now=None):
+    """Return True if the match should be considered completed for archival."""
+    if match.get("status") == "completed":
+        return True
+
+    # A final result for a future match is almost certainly bogus metadata
+    # (e.g. a Wikipedia group table read as a score). Only trust it when the
+    # match time has already passed.
+    now = now or datetime.now(timezone.utc)
+    try:
+        match_time = parse_time(match.get("match_time"))
+        result_in_past = match_time <= now
+    except Exception:
+        result_in_past = True
+
+    result = match.get("result") if isinstance(match.get("result"), dict) else {}
+    if result.get("status") == "final" and result_in_past:
+        return True
+    if match.get("match_status") == "completed" and result_in_past:
+        return True
+    return False
+
+
 def archive_completed_matches(schedule, config=None, scheduler_config=None, now=None):
     ensure_runtime_dirs(config)
     now = now or datetime.now(timezone.utc)
@@ -160,8 +183,11 @@ def archive_completed_matches(schedule, config=None, scheduler_config=None, now=
     archived = []
 
     for match in schedule:
-        should_archive = match.get("status") == "completed"
+        should_archive = _match_is_completed(match, now=now)
         if should_archive:
+            # Normalize status so downstream logic does not re-process it
+            if match.get("status") != "completed":
+                match["status"] = "completed"
             archived.append(match)
         else:
             active.append(match)

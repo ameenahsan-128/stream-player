@@ -100,6 +100,26 @@ def split_teams(match_name):
     return team1, team2
 
 
+def portal_page_url_matches_match(page_url, match_name):
+    """Return True if an existing portal page URL slug matches the match name.
+
+    Blogger page URLs are fixed at creation time. Reusing a page whose slug
+    belongs to a different match leaves the portal pointing at a misleading
+    address even after the title/content is updated.
+    """
+    if not page_url or not match_name:
+        return False
+    url_lower = str(page_url).lower().replace("_", "-")
+    team1, team2 = split_teams(match_name)
+    if not (team1 and team2):
+        return False
+    slug1 = slugify_match_name(team1).replace("_", "-")
+    slug2 = slugify_match_name(team2).replace("_", "-")
+    has_both = slug1 in url_lower and slug2 in url_lower
+    has_vs = "-vs-" in url_lower or "_vs_" in url_lower
+    return has_both and has_vs
+
+
 TEAM_DISPLAY_ALIASES = {
     "usa": "USA",
     "uae": "UAE",
