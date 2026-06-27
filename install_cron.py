@@ -23,6 +23,7 @@ def strip_existing_pipeline(content):
     lines = content.splitlines()
     cleaned = []
     in_block = False
+    in_daily_block = False
 
     for line in lines:
         stripped = line.strip()
@@ -32,15 +33,24 @@ def strip_existing_pipeline(content):
         if stripped == END_MARKER:
             in_block = False
             continue
-        if in_block:
+        if stripped == "# daily-blog-start":
+            in_daily_block = True
+            continue
+        if stripped == "# daily-blog-end":
+            in_daily_block = False
+            continue
+        if in_block or in_daily_block:
             continue
         if PIPELINE_ROOT in line and any(script in line for script in PIPELINE_SCRIPTS):
+            continue
+        if PIPELINE_ROOT in line and "daily_blog_poster.py" in line:
             continue
         cleaned.append(line)
 
     while cleaned and not cleaned[-1].strip():
         cleaned.pop()
     return "\n".join(cleaned)
+
 
 
 def build_crontab(existing, template):

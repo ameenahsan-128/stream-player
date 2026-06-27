@@ -1152,9 +1152,9 @@ def token_fuzzy_subset(subset, superset):
 def source_matches_schedule_item(match, candidate):
     """Return True if a discovered source candidate belongs to this match.
 
-    We require the URL path to contain both team slugs, OR all match tokens
-    to appear in the direct candidate text.  This prevents a partial team
-    match (e.g. "iran-vs-new-zealand.html" for "New Zealand Vs Belgium")
+    We require the URL path to contain both team slugs, OR both teams of the
+    match to be independently present in the candidate text (via their respective tokens).
+    This prevents a partial match (e.g. "Spain vs Saudi Arabia" matching "Cabo Verde vs Saudi Arabia")
     from being attached to the wrong match.
     """
     match_name = match.get("match_name", "")
@@ -1165,12 +1165,44 @@ def source_matches_schedule_item(match, candidate):
     if _source_url_path_matches_match(candidate_url, match_name):
         return True
 
-    # Token-based check: require ALL match tokens to be present
-    match_tokens = normalize_match_tokens(match_name)
-    candidate_tokens = normalize_match_tokens(candidate_text)
-    if not match_tokens:
+    # Two-sided team verification check: split by vs/v to get individual teams
+    teams = [t.strip() for t in match_name.lower().split(" vs ") if t.strip()]
+    if len(teams) < 2:
+        teams = [t.strip() for t in match_name.lower().split(" v ") if t.strip()]
+
+    # If we cannot split into two teams, fall back to simple subset check
+    if len(teams) < 2:
+        match_tokens = normalize_match_tokens(match_name)
+        candidate_tokens = normalize_match_tokens(candidate_text)
+        if not match_tokens:
+            return False
+        return token_fuzzy_subset(match_tokens, candidate_tokens)
+
+    # Resolve token sets for each team independently
+    team1_tokens = normalize_match_tokens(teams[0])
+    team2_tokens = normalize_match_tokens(teams[1])
+    
+    if not team1_tokens or not team2_tokens:
         return False
-    return token_fuzzy_subset(match_tokens, candidate_tokens)
+
+    candidate_tokens = normalize_match_tokens(candidate_text)
+
+    # Check if a team matches the candidate using exact + consonant skeleton fallback
+    def team_matches_candidate(team_tokens, candidate_tokens):
+        if team_tokens & candidate_tokens:
+            return True
+        for mt in team_tokens:
+            for ct in candidate_tokens:
+                if mt == ct:
+                    return True
+                mt_consonants = re.sub(r'[aeiou]', '', mt)
+                ct_consonants = re.sub(r'[aeiou]', '', ct)
+                if len(mt_consonants) >= 3 and len(ct_consonants) >= 3:
+                    if mt_consonants == ct_consonants or mt_consonants in ct_consonants or ct_consonants in mt_consonants:
+                        return True
+        return False
+
+    return team_matches_candidate(team1_tokens, candidate_tokens) and team_matches_candidate(team2_tokens, candidate_tokens)
 
 
 def source_urls_for_match(match):
@@ -1222,16 +1254,12 @@ def sanitize_source_urls(source_urls, match_name):
         # For URLs that have a clear match-name pattern in the path
         # (e.g. /2026/06/argentina-vs-algeria.html), verify it matches OUR match
         path_text = parsed.path.replace("/", " ").replace("-", " ").replace("_", " ")
-        path_tokens = normalize_match_tokens(path_text)
-        # If the path contains two identifiable team names and NEITHER matches
-        # our match, it's likely a wrong-match page
-        if path_tokens and match_tokens:
-            score = match_source_score(match_name, path_text)
-            # If the path has team-like content but scores 0 for our match
-            # AND has a "vs" indicator, it's definitely the wrong match
-            vs_pattern = re.search(r'\bvs?\b', path_text, flags=re.IGNORECASE)
-            if vs_pattern and score == 0 and len(path_tokens) >= 2:
-                print(f"  [!] Dropping wrong-match URL (score=0): {url[:80]}")
+        vs_pattern = re.search(r'\bvs?\b', path_text, flags=re.IGNORECASE)
+        if vs_pattern:
+            mock_match = {"match_name": match_name}
+            mock_candidate = {"url": url, "text": path_text}
+            if not source_matches_schedule_item(mock_match, mock_candidate):
+                print(f"  [!] Dropping wrong-match URL (strict two-sided check): {url[:80]}")
                 continue
 
         clean.append(url)
@@ -1441,16 +1469,41 @@ def extract_discovery_candidates(portal, html, trusted_domains):
             return True
         return False
 
-    link_pattern = re.compile(r'<a\b([^>]*)>(.*?)</a>', re.IGNORECASE | re.DOTALL)
-    for match in link_pattern.finditer(html or ""):
-        attrs = match.group(1)
-        body = re.sub(r"<[^>]+>", " ", match.group(2))
-        body = re.sub(r"\s+", " ", body).strip()
-        href_match = re.search(r'href=[\x27"]([^\x27"]+)[\x27"]', attrs, re.IGNORECASE)
-        if not href_match:
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html or "", "html.parser")
+    
+    # Exclude links from noise sections: sidebars, widgets, popular post lists, headers, footers, navs
+    noise_classes = {"sidebar", "widget", "popular-posts", "navigation", "footer", "header", "menu", "nav"}
+    noise_tags = {"footer", "header", "nav", "aside"}
+
+    for a in soup.find_all("a"):
+        href = a.get("href")
+        if not href:
             continue
+
+        parent = a.parent
+        in_noise_section = False
+        while parent:
+            if parent.name in noise_tags:
+                in_noise_section = True
+                break
+            cls = parent.get("class") or []
+            if isinstance(cls, str):
+                cls = [cls]
+            if any(any(nc in c.lower() for nc in noise_classes) for c in cls):
+                in_noise_section = True
+                break
+            parent_id = (parent.get("id") or "").lower()
+            if any(nc in parent_id for nc in noise_classes):
+                in_noise_section = True
+                break
+            parent = parent.parent
+
+        if in_noise_section:
+            continue
+
         try:
-            resolved_url = urljoin(portal, href_match.group(1))
+            resolved_url = urljoin(portal, href)
         except Exception:
             continue
         if not _url_looks_valid(resolved_url):
@@ -1462,16 +1515,21 @@ def extract_discovery_candidates(portal, html, trusted_domains):
             continue
         seen.add(canon)
 
+        body = a.get_text()
+        body = re.sub(r"\s+", " ", body).strip()
+
         # Build direct text from the URL path and anchor body only.
-        # Surrounding context is kept only for logging / tie-breaking because
-        # portal headings near a link can belong to a different match.
         url_text = candidate_text_for_url(resolved_url, "")
         anchor_text = body
         direct_text = f"{url_text} {anchor_text}".strip()
 
-        context_text = ""
-        link_start = match.start()
-        context_window = (html or "")[max(0, link_start - 500):link_start]
+        # Context text extraction
+        a_str = str(a)
+        link_start = (html or "").find(a_str)
+        if link_start != -1:
+            context_window = (html or "")[max(0, link_start - 500):link_start]
+        else:
+            context_window = ""
         context_text = re.sub(r"<[^>]+>", " ", context_window)
         context_text = re.sub(r"\s+", " ", context_text).strip()
         context_text = context_text[-120:] if context_text else ""
@@ -2006,111 +2064,146 @@ def check_and_run():
                     os.makedirs(paths["players_dir"], exist_ok=True)
                     temp_output = os.path.join(paths["players_dir"], f"player_{slugify_match_name(match['match_name'])}.html")
                 
-                    # ── Phase 1: Pre-generate with cached links ─────────────────
-                    # On the very first run (no existing player), reuse stream
-                    # links from the most recent match so the portal has clickable
-                    # buttons immediately — before the deep scrape finishes.
+                    # ── Phase 1: Pre-generate with placeholder loading page ──────
+                    # On the very first run (no existing player), generate a match-specific
+                    # placeholder loading page with an auto-refresh script. This ensures the
+                    # user doesn't see empty or wrong match links before the deep scrape finishes.
                     is_first_run = not os.path.exists(temp_output) and not match.get("_pregen_done")
                     if is_first_run:
                         try:
-                            # Find the player from the most recently played match.
-                            # That match's stream links have the highest probability
-                            # of still working because portals reuse the same embeds.
-                            cached_player_html = None
-                            player_dir = paths["players_dir"]
+                            placeholder_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loading Live Stream - {match['match_name']}</title>
+  <style>
+    body {{
+      background-color: #0b0f19;
+      color: #ffffff;
+      font-family: 'Segoe UI', Roboto, Helvetica, sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      text-align: center;
+    }}
+    .container {{
+      max-width: 500px;
+      padding: 40px 30px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      backdrop-filter: blur(8px);
+    }}
+    .spinner {{
+      width: 50px;
+      height: 50px;
+      border: 3px solid rgba(230, 57, 70, 0.1);
+      border-radius: 50%;
+      border-top-color: #e63946;
+      animation: spin 1s ease-in-out infinite;
+      margin: 0 auto 20px;
+    }}
+    @keyframes spin {{
+      to {{ transform: rotate(360deg); }}
+    }}
+    h2 {{
+      font-size: 22px;
+      margin: 10px 0;
+      color: #ffffff;
+      font-weight: 700;
+    }}
+    p {{
+      font-size: 14px;
+      color: #a0aec0;
+      margin-bottom: 25px;
+      line-height: 1.5;
+    }}
+    .badge {{
+      display: inline-block;
+      padding: 6px 12px;
+      background: rgba(230, 57, 70, 0.15);
+      color: #ff4d5a;
+      border: 1px solid rgba(230, 57, 70, 0.3);
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      animation: pulse 1.5s infinite;
+    }}
+    @keyframes pulse {{
+      0% {{ opacity: 0.6; }}
+      50% {{ opacity: 1; }}
+      100% {{ opacity: 0.6; }}
+    }}
+  </style>
+  <script>
+    // Auto-reload every 15 seconds to check if real streams are ready
+    setTimeout(function() {{
+      window.location.reload();
+    }}, 15000);
+  </script>
+</head>
+<body>
+  <div class="container">
+    <div class="spinner"></div>
+    <div class="badge">Live Stream Loading</div>
+    <h2>{match['match_name']}</h2>
+    <p>We are scanning for the best live stream channels. This page will automatically update with stream buttons once they are verified.</p>
+  </div>
+</body>
+</html>"""
+                            
+                            cached_player_html = placeholder_html
+                            with open(temp_output, "w", encoding="utf-8") as pf:
+                                pf.write(cached_player_html)
+                            print(f"[+] Phase 1: Pre-populated loading placeholder player for: {match['match_name']}")
 
-                            # Build list of other matches sorted by match_time descending
-                            # (most recently played first → freshest links)
-                            other_matches = []
-                            for other in schedule:
-                                if other is match:
-                                    continue
+                            # Upload the cached player to Blogger immediately
+                            pregen_post_url = None
+                            if has_player_oauth:
                                 try:
-                                    other_time = parse_time(other["match_time"])
-                                    if other_time <= now:  # only consider past/ongoing matches
-                                        other_matches.append((other_time, other))
-                                except Exception:
-                                    pass
-                            other_matches.sort(key=lambda x: x[0], reverse=True)
-
-                            for other_time, other in other_matches:
-                                other_slug = slugify_match_name(other.get("match_name", ""))
-                                other_path = os.path.join(player_dir, f"player_{other_slug}.html")
-                                if not os.path.exists(other_path):
-                                    continue
-                                with open(other_path, "r", encoding="utf-8") as cf:
-                                    cached_html = cf.read()
-                                cached_links = extract_stream_links(cached_html)
-                                if cached_links:
-                                    cached_player_html = cached_html
-                                    age_mins = int((now - other_time).total_seconds() / 60)
-                                    print(f"[+] Phase 1: Reusing {len(cached_links)} cached links from {other.get('match_name')} (played {age_mins}m ago)")
-                                    break
-
-                            # Fallback: if no schedule-matched player found, try any player file
-                            if not cached_player_html:
-                                files = sorted(
-                                    [f for f in os.listdir(player_dir) if f.startswith("player_") and f.endswith(".html")],
-                                    key=lambda f: os.path.getmtime(os.path.join(player_dir, f)),
-                                    reverse=True,
-                                )
-                                for cand in files:
-                                    cand_path = os.path.join(player_dir, cand)
-                                    if cand_path == temp_output:
-                                        continue
-                                    with open(cand_path, "r", encoding="utf-8") as cf:
-                                        cached_html = cf.read()
-                                    cached_links = extract_stream_links(cached_html)
-                                    if cached_links:
-                                        cached_player_html = cached_html
-                                        print(f"[+] Phase 1: Fallback — reusing {len(cached_links)} cached links from {cand}")
-                                        break
-
-                            if cached_player_html:
-                                # Write the cached player HTML as this match's player
-                                with open(temp_output, "w", encoding="utf-8") as pf:
-                                    pf.write(cached_player_html)
-                                print(f"[+] Phase 1: Pre-populated player file: {temp_output}")
-
-                                # Upload the cached player to Blogger immediately
-                                pregen_post_url = None
-                                if has_player_oauth:
-                                    try:
-                                        token = get_access_token(config)
-                                        dedicated_post_id = dedicated_player_post_id(match, player_slots)
-                                        if dedicated_post_id:
+                                    token = get_access_token(config)
+                                    dedicated_post_id = dedicated_player_post_id(match, player_slots)
+                                    if dedicated_post_id:
+                                        post_title = match["match_name"] + " Live Stream"
+                                        pregen_post_url = update_blogger_post(config, token, dedicated_post_id, post_title, cached_player_html)
+                                        match["blogger_post_id"] = dedicated_post_id
+                                        match["blogger_post_url"] = pregen_post_url
+                                        match["player_slot_url"] = pregen_post_url
+                                        print(f"[+] Phase 1: Player page uploaded (cached): {pregen_post_url}")
+                                    else:
+                                        if config.get("create_dedicated_player_posts", True):
                                             post_title = match["match_name"] + " Live Stream"
-                                            pregen_post_url = update_blogger_post(config, token, dedicated_post_id, post_title, cached_player_html)
-                                            match["blogger_post_id"] = dedicated_post_id
+                                            post_id, pregen_post_url = create_blogger_post(config, token, post_title, cached_player_html)
+                                            match["blogger_post_id"] = post_id
                                             match["blogger_post_url"] = pregen_post_url
                                             match["player_slot_url"] = pregen_post_url
-                                            print(f"[+] Phase 1: Player page uploaded (cached): {pregen_post_url}")
-                                        else:
-                                            if config.get("create_dedicated_player_posts", True):
-                                                post_title = match["match_name"] + " Live Stream"
-                                                post_id, pregen_post_url = create_blogger_post(config, token, post_title, cached_player_html)
-                                                match["blogger_post_id"] = post_id
-                                                match["blogger_post_url"] = pregen_post_url
-                                                match["player_slot_url"] = pregen_post_url
-                                                print(f"[+] Phase 1: Player post created (cached): {pregen_post_url}")
-                                    except Exception as e:
-                                        print(f"[-] Phase 1: Player upload failed (will retry after scrape): {e}")
+                                            print(f"[+] Phase 1: Player post created (cached): {pregen_post_url}")
+                                except Exception as e:
+                                    print(f"[-] Phase 1: Player upload failed (will retry after scrape): {e}")
 
-                                # Publish pre-generated portal links immediately
-                                pregen_post_url = pregen_post_url or match.get("blogger_post_url") or match.get("player_slot_url")
-                                if pregen_post_url and portal_updates_enabled:
-                                    try:
-                                        links_html = write_pregenerated_links(match["match_name"], pregen_post_url, automation_config)
-                                        new_token = get_access_token(new_config)
-                                        portal_url = update_portal_match_page(automation_config, new_config, new_token, match, "live", links_html=links_html, schedule=schedule)
-                                        match["new_blog_iframe_set"] = True
-                                        match["new_blog_prepare_set"] = False
-                                        print(f"[+] Phase 1: Portal updated with pre-generated links: {portal_url}")
-                                    except Exception as e:
-                                        print(f"[-] Phase 1: Portal pre-generation failed: {e}")
+                            # Publish pre-generated portal links immediately
+                            pregen_post_url = pregen_post_url or match.get("blogger_post_url") or match.get("player_slot_url")
+                            if pregen_post_url and portal_updates_enabled:
+                                try:
+                                    links_html = write_pregenerated_links(match["match_name"], pregen_post_url, automation_config)
+                                    new_token = get_access_token(new_config)
+                                    portal_url = update_portal_match_page(automation_config, new_config, new_token, match, "live", links_html=links_html, schedule=schedule)
+                                    match["new_blog_iframe_set"] = True
+                                    match["new_blog_prepare_set"] = False
+                                    print(f"[+] Phase 1: Portal updated with pre-generated links: {portal_url}")
+                                except Exception as e:
+                                    print(f"[-] Phase 1: Portal pre-generation failed: {e}")
 
-                                match["_pregen_done"] = True
-                                save_schedule(schedule, automation_config)
+                            match["_pregen_done"] = True
+                            save_schedule(schedule, automation_config)
                         except Exception as e:
                             print(f"[-] Phase 1 pre-generation failed (non-fatal): {e}")
 
@@ -2153,11 +2246,31 @@ def check_and_run():
                         cmd = ["python3", "generate_player.py"] + src_arg + ["-o", temp_output, "-t", match["match_name"]]
                         res = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=240)
                         print(f"[+] Scraping successful. Generated {temp_output}")
+                        if res.stdout:
+                            print(res.stdout)
+                        if res.stderr:
+                            print(res.stderr)
                         match["scrape_fail_count"] = 0  # Reset failure counter on success
                         mark_source_success(match, sources)
+                    except subprocess.CalledProcessError as e:
+                        print(f"[-] Scraping failed with exit code {e.returncode}")
+                        if e.stdout:
+                            print("=== SCRAPER STDOUT ===")
+                            print(e.stdout)
+                        if e.stderr:
+                            print("=== SCRAPER STDERR ===")
+                            print(e.stderr)
+                        # Increment failure counter for backoff logic
+                        if is_internet_available():
+                            match["scrape_fail_count"] = int(match.get("scrape_fail_count") or 0) + 1
+                        else:
+                            print("[⚠️] System offline — skipping failure count increment.")
+                        print(f"[!] Scrape fail count for {match['match_name']}: {match['scrape_fail_count']}")
+                        match["status"] = "pending"
+                        changed = True
+                        continue
                     except Exception as e:
                         print(f"[-] Scraping failed: {e}")
-                        # Increment failure counter for backoff logic
                         if is_internet_available():
                             match["scrape_fail_count"] = int(match.get("scrape_fail_count") or 0) + 1
                         else:

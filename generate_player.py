@@ -140,22 +140,66 @@ def fetch_page_with_browser_sync(url, timeout_ms=25000):
             print(f"[-] Browser fetch failed with exception: {e}", file=sys.stderr)
             return None, False
 
+def fetch_page_with_firecrawl(url, api_key):
+    """Fetch page HTML using Firecrawl API."""
+    try:
+        payload = {
+            "url": url,
+            "formats": ["rawHtml"]
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        response = requests.post("https://api.firecrawl.dev/v1/scrape", json=payload, headers=headers, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("success") and isinstance(data.get("data"), dict) and "rawHtml" in data["data"]:
+            return data["data"]["rawHtml"], True
+        elif isinstance(data.get("data"), dict) and "rawHtml" in data["data"]:
+            return data["data"]["rawHtml"], True
+        return None, False
+    except Exception as e:
+        print(f"[-] Firecrawl fetch failed for {url}: {e}", file=sys.stderr)
+        return None, False
+
 def fetch_page_html(url, headers=None, use_browser=False, timeout=15):
-    """Unified page fetcher: tries browser (Crawl4AI) first if enabled, falls back to requests.
+    """Unified page fetcher: tries self-hosted Playwright scraper first, falls back to requests.
     Returns (html_content, success, method_used) tuple.
     """
     if headers is None:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
-    # Try browser-based fetch for JS-heavy pages
-    if use_browser and is_crawl4ai_available():
-        html, success = fetch_page_with_browser_sync(url, timeout_ms=timeout * 1000)
-        if success and html:
-            print(f"[+] Browser fetch succeeded for {url} ({len(html)} chars)")
-            return html, True, "crawl4ai"
-        print(f"[-] Browser fetch failed for {url}, falling back to requests")
+    # 1. Try Self-Hosted Playwright Scraper
+    try:
+        from scraping_engine import fetch_page_with_playwright
+        domain = urlparse(url).netloc.lower()
+        is_sports_blog = "blogspot.com" in domain or "sports" in domain or "footem" in domain or "soccer" in domain
+        
+        if use_browser or is_sports_blog:
+            html, success = fetch_page_with_playwright(url)
+            if success and html:
+                print(f"[+] Self-hosted Playwright fetch succeeded for {url} ({len(html)} chars)")
+                return html, True, "playwright"
+            print(f"[-] Self-hosted Playwright fetch failed for {url}, falling back to requests")
+    except Exception as e:
+        print(f"[-] Playwright execution failed: {e}", file=sys.stderr)
 
-    # Standard requests fallback
+    # 2. Try Firecrawl if configured and Playwright failed/skipped
+    try:
+        from automation_config import load_automation_config
+        config = load_automation_config()
+        firecrawl_key = os.environ.get("FIRECRAWL_API_KEY") or config.get("scheduler", {}).get("firecrawl_api_key")
+        if firecrawl_key:
+            html, success = fetch_page_with_firecrawl(url, firecrawl_key)
+            if success and html:
+                print(f"[+] Firecrawl fetch succeeded for {url} ({len(html)} chars)")
+                return html, True, "firecrawl"
+            print(f"[-] Firecrawl fetch failed for {url}, falling back to requests")
+    except Exception as e:
+        print(f"[-] Firecrawl configuration lookup failed: {e}", file=sys.stderr)
+
+    # 3. Standard requests fallback
     try:
         response = requests.get(url, headers=headers, timeout=timeout)
         response.raise_for_status()
@@ -365,7 +409,8 @@ class EpicLinkParser(HTMLParser):
         if tag not in self_closing:
             self.open_tags.append((tag, is_ignored_container, is_whitelisted))
             
-        if tag in ("a", "button", "iframe"):
+        is_firecrawl_iframe = (tag == "div" and attr_dict.get("data-original-tag") == "iframe")
+        if tag in ("a", "button", "iframe") or is_firecrawl_iframe:
             self.current_tag = tag
             self.current_attrs = attr_dict
             self.current_text = []
@@ -391,12 +436,13 @@ class EpicLinkParser(HTMLParser):
             if popped_tag == tag:
                 break
                 
-        if tag == self.current_tag:
+        is_fc_iframe = (self.current_tag == "div" and self.current_attrs.get("data-original-tag") == "iframe")
+        if tag == self.current_tag or (tag == "div" and is_fc_iframe):
             text = "".join(self.current_text).strip()
             url = None
             if "href" in self.current_attrs:
                 url = self.current_attrs["href"]
-            elif "src" in self.current_attrs and tag == "iframe":
+            elif "src" in self.current_attrs:
                 url = self.current_attrs["src"]
             elif "onclick" in self.current_attrs:
                 onclick_val = self.current_attrs["onclick"]
@@ -409,7 +455,7 @@ class EpicLinkParser(HTMLParser):
                 self.results.append({
                     "text": text.replace("\n", " ").strip(),
                     "url": resolved_url,
-                    "tag": tag
+                    "tag": "iframe" if (tag == "iframe" or is_fc_iframe) else tag
                 })
             
             self.current_tag = None
@@ -2724,15 +2770,13 @@ def extract_root_links(root_url, headers=None):
     if headers is None:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
-    try:
-        response = requests.get(root_url, headers=headers, timeout=15)
-        response.raise_for_status()
-    except Exception as e:
-        print(f"[-] Error fetching root URL {root_url}: {e}", file=sys.stderr)
+    html, success, method = fetch_page_html(root_url, headers=headers, use_browser=should_use_browser(root_url), timeout=20)
+    if not success or not html:
+        print(f"[-] Error fetching root URL {root_url} using unified scraper", file=sys.stderr)
         return []
 
     parser = EpicLinkParser(root_url)
-    parser.feed(response.text)
+    parser.feed(html)
     
     matched_links = []
     seen_urls = set()
@@ -3108,10 +3152,9 @@ def _unwrap_iframe_relay_pages(iframe_urls):
             continue
         
         try:
-            r = requests.get(iframe_url, headers=headers, timeout=8)
-            if r.status_code != 200:
+            html, success, method = fetch_page_html(iframe_url, headers=headers, use_browser=should_use_browser(iframe_url), timeout=10)
+            if not success or not html:
                 continue
-            html = r.text
             
             # Extract inner iframes from the relay page
             inner_iframes = re.findall(
@@ -4219,7 +4262,7 @@ def main():
     parser.add_argument(
         "-d", "--depth",
         type=int,
-        default=4,
+        default=2,
         help="Maximum recursion depth for following iframes/redirects (default: 2)."
     )
     parser.add_argument(
